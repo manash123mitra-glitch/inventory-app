@@ -3,87 +3,104 @@ import pandas as pd
 import smtplib
 from email.mime.text import MIMEText
 
-# --- 1. PAGE CONFIG ---
-st.set_page_config(page_title="EMD Smart Hub", layout="wide", page_icon="📈")
-
-# --- 2. DATA LOADING ---
+# --- 1. SETTINGS & CONNECTIONS ---
+# Using the specific GIDs you provided
 SHEET_ID = "1E0ZluX3o7vqnSBAdAMEn_cdxq3ro4F4DXxchOEFcS_g"
-CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
+INV_GID = "804871972" 
+LOG_GID = "1151083374" 
 
+INV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={INV_GID}"
+LOG_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={LOG_GID}"
+
+# --- 2. DATA LOADING FUNCTIONS ---
 @st.cache_data(ttl=60)
-def load_data():
+def load_data(url, is_inventory=True):
     try:
-        df = pd.read_csv(CSV_URL)
-        if "MATERIAL DISCRIPTION" not in df.columns:
-            df = pd.read_csv(CSV_URL, skiprows=1)
+        df = pd.read_csv(url)
+        # Clean column names
         df.columns = [c.strip() for c in df.columns]
-        df['TOTAL NO'] = pd.to_numeric(df['TOTAL NO'], errors='coerce').fillna(0).astype(int)
+        
+        if is_inventory:
+            # Skip potential sub-headers like 'ALMIRA NO.1'
+            if "MATERIAL DISCRIPTION" not in df.columns:
+                df = pd.read_csv(url, skiprows=1)
+                df.columns = [c.strip() for c in df.columns]
+            df['TOTAL NO'] = pd.to_numeric(df['TOTAL NO'], errors='coerce').fillna(0).astype(int)
+        else:
+            # Process Usage Log
+            if 'Date' in df.columns:
+                df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+            if 'Quantity Issued' in df.columns:
+                df['Quantity Issued'] = pd.to_numeric(df['Quantity Issued'], errors='coerce').fillna(0)
         return df
-    except:
+    except Exception as e:
         return None
 
-# --- 3. EMAIL ALERT FUNCTION ---
+# --- 3. EMAIL ALERT LOGIC ---
 def send_email_alert(item_name):
-    """Sends an email when an item hits zero."""
-    # NOTE: You must set these in Streamlit Secrets for security
-    sender_email = st.secrets["email"]["address"]
-    sender_password = st.secrets["email"]["password"]
-    receiver_email = st.secrets["email"]["receiver"]
-
-    msg = MIMEText(f"CRITICAL ALERT: The item '{item_name}' has reached ZERO stock in the EMD Inventory.")
-    msg['Subject'] = f"🚨 Stock Out: {item_name}"
-    msg['From'] = sender_email
-    msg['To'] = receiver_email
-
     try:
+        # These must be set in your Streamlit Cloud Secrets
+        email_creds = st.secrets["email"]
+        msg = MIMEText(f"CRITICAL: '{item_name}' is out of stock in the EMD Inventory.")
+        msg['Subject'] = f"🚨 Stock Out: {item_name}"
+        msg['From'] = email_creds["address"]
+        msg['To'] = email_creds["receiver"]
+
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(sender_email, sender_password)
-            server.sendmail(sender_email, receiver_email, msg.as_string())
+            server.login(email_creds["address"], email_creds["password"])
+            server.sendmail(email_creds["address"], email_creds["receiver"], msg.as_string())
         return True
-    except Exception as e:
-        st.error(f"Email failed: {e}")
+    except:
         return False
 
 # --- 4. DASHBOARD UI ---
-st.title("📈 EMD Advanced Analytics")
-df = load_data()
+st.title("📈 EMD Advanced Analytics Hub")
 
-if df is not None:
-    # --- AUTO-CHECK FOR ZERO STOCK ---
-    zero_items = df[df['TOTAL NO'] == 0]
-    if not zero_items.empty:
-        for item in zero_items['MATERIAL DISCRIPTION']:
-            # This avoids sending 100 emails at once by checking session state
-            if f"alert_{item}" not in st.session_state:
-                if send_email_alert(item):
-                    st.session_state[f"alert_{item}"] = True
-                    st.toast(f"Email Alert Sent for {item}!", icon="📧")
+inv_df = load_data(INV_URL, is_inventory=True)
+log_df = load_data(LOG_URL, is_inventory=False)
 
-    # --- TABS FOR ORGANIZED VIEW ---
-    tab_dash, tab_charts = st.tabs(["📊 Inventory Status", "📉 Consumption Trends"])
+if inv_df is not None:
+    # Check for Zero Stock and Trigger Emails
+    zero_stock = inv_df[inv_df['TOTAL NO'] == 0]
+    for _, item in zero_stock.iterrows():
+        item_name = item['MATERIAL DISCRIPTION']
+        if f"alert_{item_name}" not in st.session_state:
+            if send_email_alert(item_name):
+                st.session_state[f"alert_{item_name}"] = True
+                st.toast(f"Email Alert Sent for {item_name}", icon="📧")
 
-    with tab_dash:
-        # (Your existing code for KPI cards and table goes here)
-        st.subheader("Current Stock Levels")
-        st.dataframe(df, use_container_width=True)
+    # Layout Tabs
+    tab_status, tab_trends = st.tabs(["📊 Inventory Status", "📉 Consumption Trends"])
 
-    with tab_charts:
-        st.subheader("Consumption Analysis")
+    with tab_status:
+        st.sidebar.header("🕹️ Filter Controls")
+        locs = sorted(inv_df['LOCATION'].dropna().unique().tolist())
+        selected_loc = st.sidebar.selectbox("Location Filter", ["All Locations"] + locs)
         
-        col_c1, col_c2 = st.columns(2)
+        display_df = inv_df if selected_loc == "All Locations" else inv_df[inv_df['LOCATION'] == selected_loc]
         
-        with col_c1:
-            st.write("📦 **Stock Volume by Location**")
-            # Image showing a sample distribution chart
+        st.subheader(f"Current Stock: {selected_loc}")
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    with tab_trends:
+        if log_df is not None and not log_df.empty:
+            st.subheader("Material Consumption Patterns")
             
-            loc_data = df.groupby('LOCATION')['TOTAL NO'].sum()
-            st.bar_chart(loc_data)
-
-        with col_c2:
-            st.write("⚠️ **Critical Stock Items**")
-            # Filtering for items that are nearly consumed
-            low_stock = df[df['TOTAL NO'] < 10].sort_values('TOTAL NO')
-            st.area_chart(low_stock.set_index('MATERIAL DISCRIPTION')['TOTAL NO'])
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write("**Usage Over Time**")
+                # Grouping consumption by date
+                
+                time_data = log_df.groupby('Date')['Quantity Issued'].sum()
+                st.line_chart(time_data)
+                
+            with c2:
+                st.write("**Top 10 Most Used Items**")
+                
+                top_items = log_df.groupby('Material Description')['Quantity Issued'].sum().nlargest(10)
+                st.bar_chart(top_items)
+        else:
+            st.info("No logs found. Record your daily issues in the 'USAGE LOG' sheet tab.")
 
 else:
-    st.error("Connection lost. Please check Google Sheet Sharing settings.")
+    st.error("Failed to connect to the Inventory tab. Verify GID 804871972 is correct.")
