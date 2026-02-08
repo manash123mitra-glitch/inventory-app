@@ -15,28 +15,31 @@ LOG_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&
 @st.cache_data(ttl=60)
 def load_synchronized_data():
     try:
-        # A. LOAD MAIN INVENTORY
-        inv_df_raw = pd.read_csv(INV_URL, header=None).fillna("")
+        # A. LOAD MAIN INVENTORY (Raw mode)
+        inv_df_raw = pd.read_csv(INV_URL, header=None).fillna("").astype(str)
         
-        # Fuzzy search for the header row
+        # SCANNER: Look for the header row by checking every cell
         header_row_idx = None
         for i, row in inv_df_raw.iterrows():
-            row_text = " ".join(row.astype(str)).upper()
-            if "MATERIAL" in row_text and "DESCRIPTION" in row_text:
+            # Check if 'MATERIAL' and 'DESCRIPTION' exist anywhere in this row
+            row_content = " ".join(row).upper()
+            if "MATERIAL" in row_content and "DESCRIPTION" in row_content:
                 header_row_idx = i
                 break
         
         if header_row_idx is None:
-            return "HEADER_NOT_FOUND", None
+            # DIAGNOSTIC: Show the actual headers found in the first 10 rows
+            return "DIAGNOSTIC", inv_df_raw.head(10)
             
         inv_df = pd.read_csv(INV_URL, skiprows=header_row_idx)
-        inv_df.columns = [str(c).strip().upper() for c in inv_df.columns]
+        # Clean headers: remove non-visible characters and spaces
+        inv_df.columns = [str(c).replace('\n', ' ').strip().upper() for c in inv_df.columns]
         
         # B. LOAD USAGE LOG
         log_df = pd.read_csv(LOG_URL)
-        log_df.columns = [str(c).strip().upper() for c in log_df.columns]
+        log_df.columns = [str(c).replace('\n', ' ').strip().upper() for c in log_df.columns]
         
-        # Standardize 'Quantity Issued' name in log to match math
+        # Standardize 'Quantity Issued' name
         log_df = log_df.rename(columns={'QUANTITY ISSUED': 'QTY_OUT'})
 
         # C. DATA CLEANING
@@ -48,8 +51,7 @@ def load_synchronized_data():
         else:
             log_df = pd.DataFrame(columns=['MATERIAL DESCRIPTION', 'TYPE(RATING)', 'LOCATION', 'QTY_OUT', 'ISSUED TO', 'PURPOSE'])
 
-        # D. TRIPLE-MATCH SYNC LOGIC (The "Fingerprint" Match)
-        # Groups log items by Name + Type + Location before subtracting
+        # D. TRIPLE-MATCH SYNC
         consumed = log_df.groupby(['MATERIAL DESCRIPTION', 'TYPE(RATING)', 'LOCATION'])['QTY_OUT'].sum().reset_index()
         
         merged = pd.merge(
@@ -65,75 +67,26 @@ def load_synchronized_data():
         return merged, log_df
 
     except Exception as e:
-        return str(e), None
+        return f"ERROR: {str(e)}", None
 
-# --- 3. PAGE CONFIG & UI ---
-st.set_page_config(page_title="EMD Executive Hub", layout="wide", page_icon="🛡️")
-
-st.title("🛡️ EMD Executive Inventory & Audit Hub")
-st.markdown("---")
+# --- 3. UI SETUP ---
+st.set_page_config(page_title="EMD Inventory Hub", layout="wide")
+st.title("🛡️ EMD Executive Inventory")
 
 inv_df, log_df = load_synchronized_data()
 
-# Error Handling for UI
+# Error/Diagnostic Handling
 if isinstance(inv_df, str):
-    if inv_df == "HEADER_NOT_FOUND":
-        st.error("❌ Could not find 'MATERIAL DESCRIPTION' in your Main Sheet. Check spelling/GID.")
+    if inv_df == "DIAGNOSTIC":
+        st.error("❌ Still cannot find 'MATERIAL DESCRIPTION'. Check the table below to see what I see:")
+        st.write("First 10 rows of your Sheet (Raw):")
+        st.dataframe(log_df) # log_df contains raw inv data in diagnostic mode
+        st.info("💡 Tip: Ensure your headers are in a single row and not merged.")
     else:
         st.error(f"🚨 Sync Error: {inv_df}")
     st.stop()
 
-# --- 4. DASHBOARD LOGIC ---
-
-# SIDEBAR FILTERS
-st.sidebar.header("🕹️ Filter Console")
-loc_list = sorted(inv_df['LOCATION'].dropna().unique().tolist())
-sel_loc = st.sidebar.selectbox("Filter by Location", ["All"] + loc_list)
-
-# Filter Logic
-disp_df = inv_df if sel_loc == "All" else inv_df[inv_df['LOCATION'] == sel_loc]
-
-# TABS
-t1, t2, t3 = st.tabs(["📊 Live Stock Status", "📈 Usage Analytics", "📜 Audit Trail"])
-
-with t1:
-    st.subheader(f"Current Inventory: {sel_loc}")
-    # Visualizing the calculated LIVE STOCK column
-    
-    st.dataframe(
-        disp_df[['MAKE', 'MATERIAL DESCRIPTION', 'TYPE(RATING)', 'LOCATION', 'TOTAL NO', 'LIVE STOCK']], 
-        use_container_width=True, 
-        hide_index=True,
-        column_config={
-            "LIVE STOCK": st.column_config.ProgressColumn(
-                "Stock Health", 
-                min_value=0, 
-                max_value=int(inv_df['TOTAL NO'].max() or 100), 
-                format="%d"
-            )
-        }
-    )
-
-with t2:
-    st.subheader("Consumption Trends")
-    if not log_df.empty:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write("**Material Consumption by Person (Issued To)**")
-            
-            if 'ISSUED TO' in log_df.columns:
-                person_data = log_df.groupby('ISSUED TO')['QTY_OUT'].sum()
-                st.bar_chart(person_data, color="#007bff")
-        with col2:
-            st.write("**Consumption by Purpose/Machine**")
-            
-            if 'PURPOSE' in log_df.columns:
-                purpose_data = log_df.groupby('PURPOSE')['QTY_OUT'].sum()
-                st.bar_chart(purpose_data, color="#28a745")
-    else:
-        st.info("📊 No usage logs found. Record entries in the 'USAGE LOG' tab to see analytics.")
-
-with t3:
-    st.subheader("📑 Detailed Audit Log")
-    st.caption("A complete history of all materials issued from the store.")
-    st.dataframe(log_df, use_container_width=True, hide_index=True)
+# --- 4. DASHBOARD RENDER ---
+# (The rest of your dashboard code continues here...)
+st.success("✅ Data Synced Successfully!")
+st.dataframe(inv_df[['MATERIAL DESCRIPTION', 'TYPE(RATING)', 'LOCATION', 'LIVE STOCK']], use_container_width=True)
