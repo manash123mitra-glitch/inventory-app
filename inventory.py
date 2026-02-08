@@ -19,14 +19,14 @@ def send_email_alert(item_name, rating, location, current_qty):
         
         subject = f"🚨 LOW STOCK ALERT: {item_name}"
         body = f"""
-        Inventory Alert System
-        ----------------------
+        EMD Material Inventory Alert
+        ----------------------------
         Item: {item_name}
         Rating/Type: {rating}
         Location: {location}
         Current Live Stock: {current_qty}
         
-        Please review the dashboard and initiate procurement if necessary.
+        This is an automated notification from the EMD Material Inventory Dashboard.
         """
         
         msg = MIMEText(body)
@@ -84,9 +84,12 @@ def load_synchronized_data():
     except Exception as e:
         return f"ERROR: {str(e)}", None
 
-# --- 4. UI RENDER ---
-st.set_page_config(page_title="EMD Inventory Hub", layout="wide", page_icon="🛡️")
-st.title("🛡️ EMD Executive Inventory Dashboard")
+# --- 4. PAGE CONFIG & UI ---
+st.set_page_config(page_title="EMD Material Inventory", layout="wide", page_icon="🛡️")
+
+# --- UPDATED HEADER HERE ---
+st.title("🛡️ EMD Material Inventory Dashboard")
+st.markdown("---")
 
 inv_df, log_df = load_synchronized_data()
 
@@ -95,15 +98,11 @@ if isinstance(inv_df, str):
     st.stop()
 
 # --- 5. EMAIL TRIGGER LOGIC ---
-# Threshold for alerts (Adjust as needed)
 ALERT_THRESHOLD = 2
-
-# Check for critical items
 critical_items = inv_df[inv_df['LIVE STOCK'] <= ALERT_THRESHOLD]
 
 if not critical_items.empty:
     for _, row in critical_items.iterrows():
-        # Create a unique key to avoid duplicate emails in the same session
         item_name = row.get('MATERIAL DISCRIPTION', row.get('MATERIAL DESCRIPTION', 'Unknown'))
         rating = row.get('TYPE(RATING)', 'N/A')
         loc = row.get('LOCATION', 'N/A')
@@ -130,10 +129,10 @@ st.dataframe(
     hide_index=True,
     column_config={
         "LIVE STOCK": st.column_config.ProgressColumn(
-            "Inventory Level", min_value=0, max_value=int(inv_df['TOTAL NO'].max()), format="%d"
+            "Inventory Level", min_value=0, max_value=int(inv_df['TOTAL NO'].max() or 100), format="%d"
         )
     }
 )
 
 with st.expander("📜 View Audit Trail (Recent Transactions)"):
-    st.dataframe(log_df, use_container_width=True)
+    st.dataframe(log_df, use_container_width=True, hide_index=True)
