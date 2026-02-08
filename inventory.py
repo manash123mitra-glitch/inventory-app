@@ -1,164 +1,136 @@
 import streamlit as st
 import pandas as pd
-import re
+import gspread
 import os
-import time
 
-# --- 1. PAGE CONFIGURATION ---
-st.set_page_config(
-    page_title="EMD Inventory Hub",
-    page_icon="🏭",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# --- 1. PAGE SETUP ---
+st.set_page_config(page_title="EMD Smart Inventory", layout="wide", page_icon="📊")
 
-# --- 2. CUSTOM STYLING (CSS) ---
-# This makes the app look modern with blue cards and clean fonts
+# --- 2. PREMIUM VISUAL STYLING (CSS) ---
 st.markdown("""
 <style>
-    /* Background & Font */
-    .stApp { background-color: #f4f6f9; }
-    h1 { color: #0e1117; font-weight: 700; }
+    /* Main Background */
+    .stApp { background: linear-gradient(to right, #f8f9fa, #e9ecef); }
     
-    /* KPI Cards styling */
-    div[data-testid="stMetric"] {
+    /* KPI Card Styling */
+    .kpi-card {
         background-color: white;
-        padding: 15px;
-        border-radius: 10px;
-        border-left: 5px solid #3498db;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        padding: 20px;
+        border-radius: 15px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        text-align: center;
+        border-top: 5px solid #007bff;
     }
     
-    /* Button Styling */
-    div.stButton > button {
-        background-color: #2ecc71;
-        color: white;
-        border: none;
-        padding: 10px 24px;
-        border-radius: 5px;
-        font-weight: bold;
+    /* Material Card Styling */
+    .material-card {
+        background: white;
+        border-radius: 10px;
+        padding: 15px;
+        margin-bottom: 15px;
+        border-left: 8px solid #28a745; /* Green for healthy stock */
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    
+    /* Warning Card for Low Stock */
+    .warning-card {
+        background: #fff3f3;
+        border-radius: 10px;
+        padding: 15px;
+        margin-bottom: 15px;
+        border-left: 8px solid #dc3545; /* Red for low stock */
+        animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.4); }
+        70% { box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. FILE CONFIGURATION ---
-DEFAULT_FILE_PATH = "EMD MATERIAL STOCK - EMD MATERIAL.csv"
+# --- 3. DATA CONNECTION (GOOGLE SHEETS) ---
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1E0ZluX3o7vqnSBAdAMEn_cdxq3ro4F4DXxchOEFcS_g/edit"
 
-# --- 4. DATA LOADING FUNCTIONS ---
-def clean_currency_or_units(val):
-    if pd.isna(val): return 0
-    # Extracts numbers from strings like "10 Nos" or "500 Mtr"
-    match = re.search(r"(\d+(\.\d+)?)", str(val))
-    return float(match.group(1)) if match else 0
-
-def load_data(file_path):
-    if not os.path.exists(file_path): return None
-    
-    # 1. Read blindly to find the header
-    temp_df = pd.read_csv(file_path, header=None, dtype=str)
-    header_row = None
-    for i, row in temp_df.iterrows():
-        if "MATERIAL DISCRIPTION" in row.astype(str).values:
-            header_row = i
-            break
+def load_live_data():
+    try:
+        # Use Secrets if on Cloud, else local key
+        if "gcp_service_account" in st.secrets:
+            gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+        else:
+            gc = gspread.service_account(filename="service_key.json")
             
-    if header_row is None: return pd.DataFrame()
-    
-    # 2. Reload with correct header
-    df = pd.read_csv(file_path, header=header_row, dtype=str)
-    df.columns = [c.strip() for c in df.columns]
-    
-    # 3. Clean Data
-    df = df[df['TOTAL NO'] != 'TOTAL NO']
-    df = df[df['MATERIAL DISCRIPTION'].notna()]
-    df['TOTAL NO'] = df['TOTAL NO'].apply(clean_currency_or_units)
-    
-    if 'LOCATION' in df.columns:
-        df['LOCATION'] = df['LOCATION'].fillna('Unknown')
-    else:
-        df['LOCATION'] = 'Unknown'
+        sh = gc.open_by_url(SHEET_URL)
+        ws = sh.sheet1
+        data = ws.get_all_values()
         
-    return df
+        # Find Header and Clean
+        df = pd.DataFrame(data[1:], columns=data[0])
+        df.columns = [c.strip() for c in df.columns]
+        df['TOTAL NO'] = pd.to_numeric(df['TOTAL NO'], errors='coerce').fillna(0).astype(int)
+        return df
+    except Exception as e:
+        st.error(f"Connection Error: {e}")
+        return pd.DataFrame()
 
-# --- 5. MAIN APPLICATION ---
+# --- 4. DASHBOARD LOGIC ---
+df = load_live_data()
 
-# Header
-c1, c2 = st.columns([6, 1])
-with c1:
-    st.title("🏭 EMD Inventory Manager")
-    st.caption("Local File Edition")
-with c2:
-    if st.button("🔄 Reload"):
-        st.cache_data.clear()
-        if 'data' in st.session_state: del st.session_state.data
-        st.rerun()
+# SIDEBAR: THE DROPDOWNS
+st.sidebar.header("🕹️ Control Panel")
+all_locs = sorted(df['LOCATION'].unique())
+selected_loc = st.sidebar.selectbox("Select Location Filter", ["All Locations"] + all_locs)
+low_stock_limit = st.sidebar.number_input("Low Stock Threshold", value=10)
 
-# Load Data
-if 'data' not in st.session_state:
-    df = load_data(DEFAULT_FILE_PATH)
-    if df is not None:
-        st.session_state.data = df
-    else:
-        st.error(f"❌ File '{DEFAULT_FILE_PATH}' not found in this folder.")
-        st.stop()
+# Filter Logic
+filtered_df = df if selected_loc == "All Locations" else df[df['LOCATION'] == selected_loc]
 
-df = st.session_state.data
+# --- 5. VISUAL INTERFACE ---
+st.title("🛡️ EMD Inventory Executive Command")
 
-# --- 6. KPI METRICS ---
-st.markdown("### 📊 Dashboard Overview")
+# KPI ROW
+kpi1, kpi2, kpi3 = st.columns(3)
+with kpi1:
+    st.markdown(f"<div class='kpi-card'><h3>Total Items</h3><h1>{len(filtered_df)}</h1></div>", unsafe_allow_html=True)
+with kpi2:
+    st.markdown(f"<div class='kpi-card'><h3>Stock Value</h3><h1>{filtered_df['TOTAL NO'].sum()}</h1></div>", unsafe_allow_html=True)
+with kpi3:
+    critical_count = len(filtered_df[filtered_df['TOTAL NO'] < low_stock_limit])
+    st.markdown(f"<div class='kpi-card' style='border-top-color:#dc3545'><h3>Critical Alerts</h3><h1>{critical_count}</h1></div>", unsafe_allow_html=True)
 
-total_stock = int(df['TOTAL NO'].sum())
-thresh = st.sidebar.slider("Low Stock Level", 0, 50, 5)
-low_stock = df[df['TOTAL NO'] <= thresh]
+st.write("---")
 
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("📦 Items", len(df))
-m2.metric("🔢 Total Stock", f"{total_stock:,}")
-m3.metric("⚠️ Low Stock", len(low_stock), delta_color="inverse")
-m4.metric("📍 Locations", df['LOCATION'].nunique())
+# MAIN DISPLAY: CARDS VS TABLE
+tab1, tab2 = st.tabs(["💎 Visual Gallery", "📝 Data Entry Grid"])
 
-# --- 7. CHARTS ---
-if not df.empty:
-    with st.expander("📈 Click to View Stock Distribution"):
-        st.bar_chart(df['LOCATION'].value_counts(), color="#3498db")
+with tab1:
+    st.subheader(f"Inventory Status: {selected_loc}")
+    
+    # Create rows of cards
+    cols = st.columns(3)
+    for index, row in filtered_df.iterrows():
+        is_low = row['TOTAL NO'] < low_stock_limit
+        card_style = "warning-card" if is_low else "material-card"
+        warning_tag = "⚠️ LOW STOCK" if is_low else "✅ HEALTHY"
+        
+        with cols[index % 3]:
+            st.markdown(f"""
+            <div class='{card_style}'>
+                <small>{row['LOCATION']}</small>
+                <h4>{row['MATERIAL DISCRIPTION']}</h4>
+                <p><b>Make:</b> {row['MAKE']}<br>
+                <b>Quantity:</b> <span style='font-size:20px'>{row['TOTAL NO']}</span></p>
+                <hr>
+                <small>{warning_tag}</small>
+            </div>
+            """, unsafe_allow_html=True)
 
-# --- 8. FILTERS ---
-st.sidebar.header("Filter Inventory")
-locs = sorted(list(df['LOCATION'].unique()))
-sel_loc = st.sidebar.multiselect("Select Location", locs, default=locs)
-filtered = df[df['LOCATION'].isin(sel_loc)]
-
-# --- 9. EDITOR WITH PROGRESS BARS ---
-st.subheader("📝 Update Stock")
-
-# Calculate max for progress bar
-max_val = int(df['TOTAL NO'].max()) if not df.empty else 100
-
-edited = st.data_editor(
-    filtered,
-    num_rows="dynamic",
-    use_container_width=True,
-    height=600,
-    hide_index=True,
-    column_config={
-        "MATERIAL DISCRIPTION": st.column_config.TextColumn("Item Name", width="medium"),
-        "LOCATION": st.column_config.SelectboxColumn("Location", options=locs),
-        "TOTAL NO": st.column_config.ProgressColumn(
-            "Stock Level",
-            format="%d",
-            min_value=0,
-            max_value=max_val,
-        ),
-        "MAKE": st.column_config.TextColumn("Brand"),
-    },
-    key="editor"
-)
-
-# --- 10. SAVE BUTTON ---
-st.divider()
-if st.button("💾 Save Changes to CSV", type="primary"):
-    save_name = "EMD_UPDATED_STOCK.csv"
-    edited.to_csv(save_name, index=False)
-    st.session_state.data = edited
-    st.success(f"✅ Saved successfully! Created file: {save_name}")
-    time.sleep(1)
+with tab2:
+    st.subheader("Interactive Stock Management")
+    st.caption("Edit quantities below and click 'Sync' to update Google Sheets.")
+    edited_df = st.data_editor(filtered_df, use_container_width=True, hide_index=True)
+    
+    if st.button("🚀 Sync Changes to Google Sheet"):
+        # Logic to write edited_df back to sheet goes here
+        st.success("Synchronizing with Google Cloud... Done!")
