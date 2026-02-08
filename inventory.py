@@ -29,19 +29,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. ROBUST DATA LOADING ---
+# --- 3. DATA LOADING ---
 @st.cache_data(ttl=60)
 def load_data():
     try:
-        # Inventory
+        # Load Inventory
         inv_raw = pd.read_csv(INV_URL, header=None).fillna("").astype(str)
         h_idx = next((i for i, r in inv_raw.iterrows() if "MATERIAL" in " ".join(r).upper()), None)
         if h_idx is None: return "HEADER_NOT_FOUND", None
         
         inv = pd.read_csv(INV_URL, skiprows=h_idx)
         inv.columns = [str(c).strip().replace('\n', ' ').upper() for c in inv.columns]
-        
-        # Standardize common spelling errors
         inv.columns = [c.replace("DESCRIPTION", "DISCRIPTION") for c in inv.columns]
         
         if 'TOTAL NO' in inv.columns:
@@ -101,15 +99,26 @@ for _, r in crit.iterrows():
         if send_email_alert(r['MATERIAL DISCRIPTION'], r['LIVE STOCK']):
             st.session_state[key] = True
 
-# Main Table Logic - DYNAMIC COLUMN SELECTION
-# This prevents the KeyError by only selecting columns that actually exist
-cols_to_show = [c for c in ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'TOTAL NO', 'LIVE STOCK'] if c in inv_df.columns]
-
+# FILTER PANEL - FIXED SORTING
 st.sidebar.header("Filter Panel")
-locs = ["All"] + sorted(inv_df['LOCATION'].unique().tolist())
+if 'LOCATION' in inv_df.columns:
+    # Convert all locations to string and fill empty ones to prevent sorting crash
+    raw_locs = inv_df['LOCATION'].fillna("Unassigned").astype(str).unique().tolist()
+    locs = ["All"] + sorted(raw_locs)
+else:
+    locs = ["All"]
+
 sel_loc = st.sidebar.selectbox("Select Location", locs)
 
-filtered = inv_df if sel_loc == "All" else inv_df[inv_df['LOCATION'] == sel_loc]
+# Apply Filter
+filtered = inv_df.copy()
+if sel_loc != "All":
+    filtered = filtered[filtered['LOCATION'].astype(str) == sel_loc]
+
+# Dynamic Column Selection
+cols_to_show = [c for c in ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'TOTAL NO', 'LIVE STOCK'] if c in inv_df.columns]
+
+
 
 tab1, tab2 = st.tabs(["📦 Inventory Grid", "📋 Usage History"])
 
@@ -118,7 +127,7 @@ with tab1:
         filtered[cols_to_show],
         use_container_width=True,
         hide_index=True,
-        column_config={"LIVE STOCK": st.column_config.ProgressColumn("Availability", format="%d", min_value=0, max_value=int(inv_df['TOTAL NO'].max()))}
+        column_config={"LIVE STOCK": st.column_config.ProgressColumn("Availability", format="%d", min_value=0, max_value=int(inv_df['TOTAL NO'].max() or 100))}
     )
 
 with tab2:
