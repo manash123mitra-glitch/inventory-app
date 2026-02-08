@@ -1,10 +1,7 @@
 import streamlit as st
 import pandas as pd
-import smtplib
-from email.mime.text import MIMEText
 
-# --- 1. SETTINGS & CONNECTIONS ---
-# Using the specific GIDs you provided
+# --- 1. SETTINGS ---
 SHEET_ID = "1E0ZluX3o7vqnSBAdAMEn_cdxq3ro4F4DXxchOEFcS_g"
 INV_GID = "804871972" 
 LOG_GID = "1151083374" 
@@ -12,95 +9,78 @@ LOG_GID = "1151083374"
 INV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={INV_GID}"
 LOG_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={LOG_GID}"
 
-# --- 2. DATA LOADING FUNCTIONS ---
+# --- 2. DATA LOADING & SYNC ---
 @st.cache_data(ttl=60)
-def load_data(url, is_inventory=True):
+def load_synchronized_data():
     try:
-        df = pd.read_csv(url)
-        # Clean column names
-        df.columns = [c.strip() for c in df.columns]
+        # Load Inventory
+        inv_df = pd.read_csv(INV_URL)
+        inv_df.columns = [c.strip() for c in inv_df.columns]
         
-        if is_inventory:
-            # Skip potential sub-headers like 'ALMIRA NO.1'
-            if "MATERIAL DISCRIPTION" not in df.columns:
-                df = pd.read_csv(url, skiprows=1)
-                df.columns = [c.strip() for c in df.columns]
-            df['TOTAL NO'] = pd.to_numeric(df['TOTAL NO'], errors='coerce').fillna(0).astype(int)
-        else:
-            # Process Usage Log
-            if 'Date' in df.columns:
-                df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
-            if 'Quantity Issued' in df.columns:
-                df['Quantity Issued'] = pd.to_numeric(df['Quantity Issued'], errors='coerce').fillna(0)
-        return df
+        # Load Usage Log
+        log_df = pd.read_csv(LOG_URL)
+        log_df.columns = [c.strip() for c in log_df.columns]
+        
+        # Numeric Cleaning
+        inv_df['TOTAL NO'] = pd.to_numeric(inv_df['TOTAL NO'], errors='coerce').fillna(0).astype(int)
+        log_df['Quantity Issued'] = pd.to_numeric(log_df['Quantity Issued'], errors='coerce').fillna(0).astype(int)
+        
+        # UNIQUE MATCH LOGIC: Group by Name, Type(Rating), and Location
+        consumed = log_df.groupby(['MATERIAL DESCRIPTION', 'TYPE(RATING)', 'LOCATION'])['Quantity Issued'].sum().reset_index()
+        
+        # Merge with Main Sheet
+        merged = pd.merge(
+            inv_df, 
+            consumed, 
+            on=['MATERIAL DESCRIPTION', 'TYPE(RATING)', 'LOCATION'], 
+            how='left'
+        )
+        
+        merged['Quantity Issued'] = merged['Quantity Issued'].fillna(0)
+        merged['LIVE STOCK'] = merged['TOTAL NO'] - merged['Quantity Issued']
+        
+        return merged, log_df
     except Exception as e:
-        return None
+        st.error(f"Error Syncing Data: {e}")
+        return None, None
 
-# --- 3. EMAIL ALERT LOGIC ---
-def send_email_alert(item_name):
-    try:
-        # These must be set in your Streamlit Cloud Secrets
-        email_creds = st.secrets["email"]
-        msg = MIMEText(f"CRITICAL: '{item_name}' is out of stock in the EMD Inventory.")
-        msg['Subject'] = f"🚨 Stock Out: {item_name}"
-        msg['From'] = email_creds["address"]
-        msg['To'] = email_creds["receiver"]
+# --- 3. DASHBOARD UI ---
+st.title("🛡️ EMD Executive Inventory & Audit")
 
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(email_creds["address"], email_creds["password"])
-            server.sendmail(email_creds["address"], email_creds["receiver"], msg.as_string())
-        return True
-    except:
-        return False
-
-# --- 4. DASHBOARD UI ---
-st.title("📈 EMD Advanced Analytics Hub")
-
-inv_df = load_data(INV_URL, is_inventory=True)
-log_df = load_data(LOG_URL, is_inventory=False)
+inv_df, log_df = load_synchronized_data()
 
 if inv_df is not None:
-    # Check for Zero Stock and Trigger Emails
-    zero_stock = inv_df[inv_df['TOTAL NO'] == 0]
-    for _, item in zero_stock.iterrows():
-        item_name = item['MATERIAL DISCRIPTION']
-        if f"alert_{item_name}" not in st.session_state:
-            if send_email_alert(item_name):
-                st.session_state[f"alert_{item_name}"] = True
-                st.toast(f"Email Alert Sent for {item_name}", icon="📧")
+    # --- FILTERS ---
+    st.sidebar.header("🕹️ Filter Controls")
+    sel_loc = st.sidebar.selectbox("Location", ["All"] + sorted(inv_df['LOCATION'].unique()))
+    
+    # Filtered Data
+    disp_df = inv_df if sel_loc == "All" else inv_df[inv_df['LOCATION'] == sel_loc]
 
-    # Layout Tabs
-    tab_status, tab_trends = st.tabs(["📊 Inventory Status", "📉 Consumption Trends"])
+    # --- TABS ---
+    t1, t2, t3 = st.tabs(["📊 Stock Status", "📈 Trends", "🕵️ Audit Trail"])
 
-    with tab_status:
-        st.sidebar.header("🕹️ Filter Controls")
-        locs = sorted(inv_df['LOCATION'].dropna().unique().tolist())
-        selected_loc = st.sidebar.selectbox("Location Filter", ["All Locations"] + locs)
-        
-        display_df = inv_df if selected_loc == "All Locations" else inv_df[inv_df['LOCATION'] == selected_loc]
-        
-        st.subheader(f"Current Stock: {selected_loc}")
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+    with t1:
+        st.subheader(f"Current Stock - {sel_loc}")
+        st.dataframe(disp_df[['MAKE', 'MATERIAL DESCRIPTION', 'TYPE(RATING)', 'LOCATION', 'LIVE STOCK']], 
+                     use_container_width=True, hide_index=True)
 
-    with tab_trends:
-        if log_df is not None and not log_df.empty:
-            st.subheader("Material Consumption Patterns")
+    with t2:
+        st.subheader("Consumption Analysis")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**Usage by Person (Issued To)**")
             
-            c1, c2 = st.columns(2)
-            with c1:
-                st.write("**Usage Over Time**")
-                # Grouping consumption by date
-                
-                time_data = log_df.groupby('Date')['Quantity Issued'].sum()
-                st.line_chart(time_data)
-                
-            with c2:
-                st.write("**Top 10 Most Used Items**")
-                
-                top_items = log_df.groupby('Material Description')['Quantity Issued'].sum().nlargest(10)
-                st.bar_chart(top_items)
-        else:
-            st.info("No logs found. Record your daily issues in the 'USAGE LOG' sheet tab.")
+            person_usage = log_df.groupby('Issued To')['Quantity Issued'].sum()
+            st.bar_chart(person_usage)
+        with col2:
+            st.write("**Usage by Purpose**")
+            
+            purpose_usage = log_df.groupby('Purpose')['Quantity Issued'].sum()
+            st.bar_chart(purpose_usage)
 
-else:
-    st.error("Failed to connect to the Inventory tab. Verify GID 804871972 is correct.")
+    with t3:
+        st.subheader("📜 Complete Transaction History")
+        # Showing the detailed log with your new headers
+        st.dataframe(log_df[['Date', 'MATERIAL DESCRIPTION', 'Quantity Issued', 'Issued To', 'Purpose']], 
+                     use_container_width=True, hide_index=True)
