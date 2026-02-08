@@ -1,136 +1,107 @@
 import streamlit as st
 import pandas as pd
-import gspread
-import os
 
-# --- 1. PAGE SETUP ---
-st.set_page_config(page_title="EMD Smart Inventory", layout="wide", page_icon="📊")
+# --- 1. PAGE CONFIG & STYLING ---
+st.set_page_config(page_title="EMD Inventory Hub", layout="wide", page_icon="📦")
 
-# --- 2. PREMIUM VISUAL STYLING (CSS) ---
+# Professional CSS for a modern look
 st.markdown("""
 <style>
-    /* Main Background */
-    .stApp { background: linear-gradient(to right, #f8f9fa, #e9ecef); }
-    
-    /* KPI Card Styling */
-    .kpi-card {
+    .stApp { background-color: #f0f2f6; }
+    .metric-card {
         background-color: white;
         padding: 20px;
-        border-radius: 15px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-        text-align: center;
-        border-top: 5px solid #007bff;
-    }
-    
-    /* Material Card Styling */
-    .material-card {
-        background: white;
         border-radius: 10px;
-        padding: 15px;
-        margin-bottom: 15px;
-        border-left: 8px solid #28a745; /* Green for healthy stock */
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        box-shadow: 2px 2px 10px rgba(0,0,0,0.05);
+        border-left: 5px solid #007bff;
     }
-    
-    /* Warning Card for Low Stock */
-    .warning-card {
-        background: #fff3f3;
-        border-radius: 10px;
-        padding: 15px;
-        margin-bottom: 15px;
-        border-left: 8px solid #dc3545; /* Red for low stock */
-        animation: pulse 2s infinite;
-    }
-    
-    @keyframes pulse {
-        0% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.4); }
-        70% { box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); }
-        100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
+    .low-stock-card {
+        background-color: #fff3f3;
+        border-left: 5px solid #dc3545;
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 5px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. DATA CONNECTION (GOOGLE SHEETS) ---
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1E0ZluX3o7vqnSBAdAMEn_cdxq3ro4F4DXxchOEFcS_g/edit"
+# --- 2. THE GOOGLE SHEET LINK ---
+# Replace the ID below with the ID from YOUR Google Sheet link
+SHEET_ID = "1E0ZluX3o7vqnSBAdAMEn_cdxq3ro4F4DXxchOEFcS_g"
+SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
 
-def load_live_data():
+@st.cache_data(ttl=600) # Refresh every 10 minutes
+def get_data():
     try:
-        # Use Secrets if on Cloud, else local key
-        if "gcp_service_account" in st.secrets:
-            gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
-        else:
-            gc = gspread.service_account(filename="service_key.json")
-            
-        sh = gc.open_by_url(SHEET_URL)
-        ws = sh.sheet1
-        data = ws.get_all_values()
+        # We read the shared CSV link directly
+        df = pd.read_csv(SHEET_URL)
         
-        # Find Header and Clean
-        df = pd.DataFrame(data[1:], columns=data[0])
+        # Data Cleaning
         df.columns = [c.strip() for c in df.columns]
+        # Find the row where actual data starts (skipping 'ALMIRA NO.1' etc if present)
+        if "MATERIAL DISCRIPTION" not in df.columns:
+             df = pd.read_csv(SHEET_URL, skiprows=1)
+        
+        # Convert Stock to Number
         df['TOTAL NO'] = pd.to_numeric(df['TOTAL NO'], errors='coerce').fillna(0).astype(int)
         return df
     except Exception as e:
-        st.error(f"Connection Error: {e}")
+        st.error(f"Error connecting to Sheet: {e}")
         return pd.DataFrame()
 
-# --- 4. DASHBOARD LOGIC ---
-df = load_live_data()
+# --- 3. DASHBOARD LOGIC ---
+st.title("🛡️ EMD Executive Inventory Dashboard")
 
-# SIDEBAR: THE DROPDOWNS
-st.sidebar.header("🕹️ Control Panel")
-all_locs = sorted(df['LOCATION'].unique())
-selected_loc = st.sidebar.selectbox("Select Location Filter", ["All Locations"] + all_locs)
-low_stock_limit = st.sidebar.number_input("Low Stock Threshold", value=10)
+df = get_data()
 
-# Filter Logic
-filtered_df = df if selected_loc == "All Locations" else df[df['LOCATION'] == selected_loc]
-
-# --- 5. VISUAL INTERFACE ---
-st.title("🛡️ EMD Inventory Executive Command")
-
-# KPI ROW
-kpi1, kpi2, kpi3 = st.columns(3)
-with kpi1:
-    st.markdown(f"<div class='kpi-card'><h3>Total Items</h3><h1>{len(filtered_df)}</h1></div>", unsafe_allow_html=True)
-with kpi2:
-    st.markdown(f"<div class='kpi-card'><h3>Stock Value</h3><h1>{filtered_df['TOTAL NO'].sum()}</h1></div>", unsafe_allow_html=True)
-with kpi3:
-    critical_count = len(filtered_df[filtered_df['TOTAL NO'] < low_stock_limit])
-    st.markdown(f"<div class='kpi-card' style='border-top-color:#dc3545'><h3>Critical Alerts</h3><h1>{critical_count}</h1></div>", unsafe_allow_html=True)
-
-st.write("---")
-
-# MAIN DISPLAY: CARDS VS TABLE
-tab1, tab2 = st.tabs(["💎 Visual Gallery", "📝 Data Entry Grid"])
-
-with tab1:
-    st.subheader(f"Inventory Status: {selected_loc}")
+if not df.empty:
+    # --- SIDEBAR DROPDOWN ---
+    st.sidebar.header("🕹️ Filter Controls")
+    locations = sorted(df['LOCATION'].unique().tolist())
+    selected_location = st.sidebar.selectbox("Select Storage Location", ["All Locations"] + locations)
     
-    # Create rows of cards
-    cols = st.columns(3)
-    for index, row in filtered_df.iterrows():
-        is_low = row['TOTAL NO'] < low_stock_limit
-        card_style = "warning-card" if is_low else "material-card"
-        warning_tag = "⚠️ LOW STOCK" if is_low else "✅ HEALTHY"
-        
-        with cols[index % 3]:
-            st.markdown(f"""
-            <div class='{card_style}'>
-                <small>{row['LOCATION']}</small>
-                <h4>{row['MATERIAL DISCRIPTION']}</h4>
-                <p><b>Make:</b> {row['MAKE']}<br>
-                <b>Quantity:</b> <span style='font-size:20px'>{row['TOTAL NO']}</span></p>
-                <hr>
-                <small>{warning_tag}</small>
-            </div>
-            """, unsafe_allow_html=True)
+    threshold = st.sidebar.slider("Low Stock Threshold", 0, 50, 10)
 
-with tab2:
-    st.subheader("Interactive Stock Management")
-    st.caption("Edit quantities below and click 'Sync' to update Google Sheets.")
-    edited_df = st.data_editor(filtered_df, use_container_width=True, hide_index=True)
+    # Filter Data
+    if selected_location != "All Locations":
+        display_df = df[df['LOCATION'] == selected_location]
+    else:
+        display_df = df
+
+    # --- TOP METRICS ---
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(f"<div class='metric-card'><h4>Total Items</h4><h2>{len(display_df)}</h2></div>", unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"<div class='metric-card'><h4>Total Quantity</h4><h2>{display_df['TOTAL NO'].sum()}</h2></div>", unsafe_allow_html=True)
+    with col3:
+        low_stock_list = display_df[display_df['TOTAL NO'] < threshold]
+        st.markdown(f"<div class='metric-card' style='border-left-color:red'><h4>Low Stock Alerts</h4><h2>{len(low_stock_list)}</h2></div>", unsafe_allow_html=True)
+
+    # --- VISUAL DASHBOARD ---
+    st.write("---")
     
-    if st.button("🚀 Sync Changes to Google Sheet"):
-        # Logic to write edited_df back to sheet goes here
-        st.success("Synchronizing with Google Cloud... Done!")
+    # Left Side: The Table
+    left_col, right_col = st.columns([2, 1])
+    
+    with left_col:
+        st.subheader("📝 Material Records")
+        st.dataframe(display_df, use_container_width=True, hide_index=True, column_config={
+            "TOTAL NO": st.column_config.ProgressColumn("Stock Level", min_value=0, max_value=int(df['TOTAL NO'].max()))
+        })
+
+    with right_col:
+        st.subheader("⚠️ Critical Shortages")
+        if not low_stock_list.empty:
+            for _, row in low_stock_list.iterrows():
+                st.markdown(f"""
+                <div class='low-stock-card'>
+                    <strong>{row['MATERIAL DISCRIPTION']}</strong><br>
+                    Qty: {row['TOTAL NO']} | Location: {row['LOCATION']}
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.success("All stock levels are optimal.")
+
+else:
+    st.info("Please ensure your Google Sheet link is correct and set to 'Anyone with the link'.")
