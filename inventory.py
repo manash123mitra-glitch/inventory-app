@@ -67,7 +67,10 @@ def send_email_alert(name, qty):
         msg = MIMEText(f"Low Stock Alert: {name} is at {qty} units.")
         msg['Subject'] = f"🚨 Stock Alert: {name}"
         msg['From'], msg['To'] = creds["address"], creds["receiver"]
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+        
+        # Using Port 587 with STARTTLS (More stable for Streamlit)
+        with smtplib.SMTP("smtp.gmail.com", 587) as s:
+            s.starttls() # Secure the connection
             s.login(creds["address"], creds["password"])
             s.sendmail(creds["address"], creds["receiver"], msg.as_string())
         return True
