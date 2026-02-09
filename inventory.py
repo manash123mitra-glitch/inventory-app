@@ -4,9 +4,9 @@ import smtplib
 import ssl
 from email.mime.text import MIMEText
 from datetime import datetime
-import pytz # Required for Indian Standard Time
+import pytz
 
-# --- 1. SETTINGS & TIMEZONE ---
+# --- 1. GLOBAL SETTINGS ---
 SHEET_ID = "1E0ZluX3o7vqnSBAdAMEn_cdxq3ro4F4DXxchOEFcS_g"
 INV_GID = "804871972" 
 LOG_GID = "1151083374" 
@@ -19,19 +19,28 @@ LOG_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&
 
 st.set_page_config(page_title="EMD Material Dashboard", layout="wide", page_icon="🛡️")
 
-# --- 2. EMAIL ENGINE (Safe & Secure) ---
+# --- 2. PERSISTENT MEMORY (The Fix) ---
+# This class stays alive on the server even if you close your browser.
+@st.cache_resource
+class EmailTracker:
+    def __init__(self):
+        self.last_sent_date = None
+
+# Initialize the global tracker
+tracker = EmailTracker()
+
+# --- 3. EMAIL ENGINE ---
 def send_daily_summary_email(items_list):
     try:
         if "email" not in st.secrets: return False
         creds = st.secrets["email"]
         
-        # Get Current Date for the Email Subject
         today_str = datetime.now(IST).strftime("%d-%b-%Y")
         
         body = f"🚨 EMD DAILY STOCK REPORT ({today_str})\n" + "="*40 + "\n\n"
         for item in items_list:
             body += f"• {item['name']} | Stock: {item['qty']} | Loc: {item['loc']}\n"
-        body += "\n" + "-"*40 + "\nAutomated Alert - Sent once daily after 9:00 AM."
+        body += "\n" + "-"*40 + "\nAutomated Alert - Sent once daily."
         
         msg = MIMEText(body)
         msg['Subject'] = f"🛡️ Daily Alert ({today_str}): {len(items_list)} Items Critical"
@@ -47,7 +56,7 @@ def send_daily_summary_email(items_list):
         return True
     except: return False
 
-# --- 3. ROBUST DATA LOADING ---
+# --- 4. DATA LOADING ---
 @st.cache_data(ttl=60)
 def load_data():
     try:
@@ -64,7 +73,7 @@ def load_data():
         log.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in log.columns]
         log = log.rename(columns={'QUANTITY ISSUED': 'QTY_OUT', 'ISSUED QUANTITY': 'QTY_OUT', 'QTY': 'QTY_OUT'})
 
-        # Type Safety (Fix for Merge Errors)
+        # Type Safety
         merge_keys = ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION']
         valid_keys = [k for k in merge_keys if k in inv.columns and k in log.columns]
         
@@ -86,7 +95,7 @@ def load_data():
         return merged, log
     except Exception as e: return str(e), None
 
-# --- 4. DASHBOARD UI ---
+# --- 5. DASHBOARD UI ---
 inv_df, log_df = load_data()
 if isinstance(inv_df, str): st.error(inv_df); st.stop()
 
@@ -102,19 +111,17 @@ c2.metric("Total Stock", int(inv_df['LIVE STOCK'].sum()))
 crit = inv_df[inv_df['LIVE STOCK'] <= 2]
 c3.metric("Critical Alerts", len(crit))
 
-# Sidebar Settings
-st.sidebar.header("⚙️ Settings")
-if st.sidebar.button("Test Email (Force Send)"):
-    # This button allows you to manually force an email instantly for testing
-    clist = []
-    for _, r in crit.iterrows():
-        clist.append({'name': r['MATERIAL DISCRIPTION'], 'qty': r['LIVE STOCK'], 'loc': r['LOCATION']})
-    if send_daily_summary_email(clist):
-        st.sidebar.success("Test Email Sent Successfully!")
-    else:
-        st.sidebar.error("Email Failed.")
+# Sidebar Info
+st.sidebar.header("⚙️ Status Panel")
+current_time_str = datetime.now(IST).strftime("%I:%M %p")
+st.sidebar.write(f"🕒 Time: {current_time_str}")
 
-# Filter Location
+if tracker.last_sent_date == datetime.now(IST).strftime("%Y-%m-%d"):
+    st.sidebar.success("✅ Daily Email: SENT")
+else:
+    st.sidebar.warning("⏳ Daily Email: PENDING")
+
+# Filter
 loc_list = sorted(inv_df['LOCATION'].replace('nan', 'Unassigned').unique().tolist())
 sel_loc = st.sidebar.selectbox("Filter Location", ["All"] + loc_list)
 filtered_inv = inv_df.copy()
@@ -130,54 +137,45 @@ with tab1:
                  column_config={"LIVE STOCK": st.column_config.ProgressColumn("Availability", format="%d", min_value=0, max_value=int(inv_df['TOTAL NO'].max() or 100))})
 
 with tab2:
-    st.markdown("### 🔍 Search Material Drawal History")
-    search_term = st.text_input("Search Logs (Name, Person, or Item)", placeholder="Type to find transaction...")
+    search_term = st.text_input("Search Logs", placeholder="Name or Item...")
     display_log = log_df.copy()
     if search_term:
         display_log = display_log[display_log.apply(lambda row: search_term.upper() in row.astype(str).str.upper().to_string(), axis=1)]
     st.dataframe(display_log, use_container_width=True, hide_index=True)
 
 
-# --- 5. "ONCE-A-DAY AT 9 AM" LOGIC ---
+# --- 6. THE "GLOBAL LOCK" EMAIL LOGIC ---
+# This is the logic that prevents spam. 
 
-# Initialize Session State
-if "daily_email_sent" not in st.session_state:
-    st.session_state.daily_email_sent = False
+today_str = datetime.now(IST).strftime("%Y-%m-%d")
+current_hour = datetime.now(IST).hour
 
-# Get Current Time in India (IST)
-now_ist = datetime.now(IST)
-current_hour = now_ist.hour
-current_minute = now_ist.minute
+# Condition 1: Is it today's email already sent globally?
+email_already_sent_today = (tracker.last_sent_date == today_str)
 
-# CHECK 1: Is it past 9:00 AM?
-is_time_to_send = current_hour >= 9
+# Condition 2: Is it past 9 AM?
+is_time = (current_hour >= 9)
 
-# CHECK 2: Have we already sent it this session?
-has_not_sent_yet = not st.session_state.daily_email_sent
+# Condition 3: Are there items to send?
+items_exist = not crit.empty
 
-# CHECK 3: Are there critical items?
-has_critical_items = not crit.empty
-
-if is_time_to_send and has_not_sent_yet and has_critical_items:
+# EXECUTE
+if is_time and items_exist and not email_already_sent_today:
     
-    # Prepare the list
+    # Create List
     clist = []
     for _, r in crit.iterrows():
         clist.append({'name': r['MATERIAL DISCRIPTION'], 'qty': r['LIVE STOCK'], 'loc': r['LOCATION']})
     
-    # Attempt to Send
+    # Send
     if send_daily_summary_email(clist):
-        st.toast(f"✅ Daily Summary Email Sent ({len(clist)} items)")
-        st.session_state.daily_email_sent = True # LOCK it so it doesn't send again
+        # *** UPDATE GLOBAL MEMORY ***
+        tracker.last_sent_date = today_str 
+        st.toast(f"✅ Daily Summary Sent ({len(clist)} items)")
+        st.sidebar.success("✅ Daily Email: SENT")
     else:
-        st.toast("⚠️ Daily Email Failed (Check Connection)")
+        st.toast("⚠️ Daily Email Failed")
 
-# Display status in sidebar for peace of mind
-st.sidebar.markdown("---")
-if st.session_state.daily_email_sent:
-    st.sidebar.info(f"✅ Daily Email Status: **SENT**")
-else:
-    if current_hour < 9:
-        st.sidebar.warning(f"⏳ Daily Email Status: **WAITING (Scheduled for 09:00 AM)**")
-    else:
-        st.sidebar.warning(f"⚠️ Daily Email Status: **PENDING (Processing...)**")
+elif email_already_sent_today:
+    # If already sent, do nothing. Just show status.
+    pass
