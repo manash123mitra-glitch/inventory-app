@@ -13,44 +13,68 @@ LOG_GID = "1151083374"
 INV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={INV_GID}"
 LOG_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={LOG_GID}"
 
-# --- 2. CLEAN UI CONFIG & CSS ---
+# --- 2. UI CONFIG & CSS ---
 st.set_page_config(page_title="EMD Material Dashboard", layout="wide", page_icon="🛡️")
 
-# Initialize persistent log
 if "email_history" not in st.session_state:
     st.session_state.email_history = []
 
-# CSS: Clean, Professional, Light Theme
+# Professional Light Theme CSS
 st.markdown("""
 <style>
-    /* Light Grey Background */
-    .stApp {
-        background-color: #f8f9fa;
-    }
-    
-    /* Professional Blue Header Box */
+    .stApp { background-color: #f8f9fa; }
     .header-box {
         background: linear-gradient(90deg, #1e3c72 0%, #2a5298 100%);
-        padding: 20px;
-        border-radius: 10px;
-        color: white;
-        text-align: center;
-        margin-bottom: 30px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        padding: 20px; border-radius: 10px; color: white;
+        text-align: center; margin-bottom: 30px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
-    
-    /* Clean White Metric Cards */
     div[data-testid="stMetric"] {
-        background-color: white;
-        padding: 15px;
-        border-radius: 10px;
-        border-left: 5px solid #1e3c72;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        background-color: white; padding: 15px; border-radius: 10px;
+        border-left: 5px solid #1e3c72; box-shadow: 0 2px 5px rgba(0,0,0,0.05);
     }
+    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
+    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #fff; border-radius: 5px; padding: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. DATA LOADING (Robust) ---
+# --- 3. DUAL-PORT EMAIL ENGINE ---
+def send_email_alert(name, qty, location="N/A", is_test=False):
+    try:
+        creds = st.secrets["email"]
+        label = "TEST" if is_test else "STOCK ALERT"
+        msg = MIMEText(f"{label}: {name} is at {qty} units in {location}.")
+        msg['Subject'] = f"🚨 {label}: {name}"
+        msg['From'], msg['To'] = creds["address"], creds["receiver"]
+        
+        status = "Failed"
+        
+        # ATTEMPT 1: PORT 587 (Standard)
+        try:
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as s:
+                s.starttls()
+                s.login(creds["address"], creds["password"])
+                s.sendmail(creds["address"], creds["receiver"], msg.as_string())
+            status = "Sent (Port 587)"
+        except:
+            # ATTEMPT 2: PORT 465 (Office Bypass)
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as s:
+                s.login(creds["address"], creds["password"])
+                s.sendmail(creds["address"], creds["receiver"], msg.as_string())
+            status = "Sent (Port 465)"
+
+        st.session_state.email_history.append({
+            "Timestamp": datetime.now().strftime("%H:%M:%S"),
+            "Item": name, "Location": location, "Status": status
+        })
+        return True
+    except Exception as e:
+        st.session_state.email_history.append({
+            "Timestamp": datetime.now().strftime("%H:%M:%S"),
+            "Item": name, "Status": f"FAILED: {str(e)}"
+        })
+        return False
+
+# --- 4. DATA LOADING ENGINE ---
 @st.cache_data(ttl=60)
 def load_data():
     try:
@@ -82,76 +106,42 @@ def load_data():
         return merged, log
     except Exception as e: return str(e), None
 
-def send_email_alert(name, qty, location="N/A", is_test=False):
-    try:
-        creds = st.secrets["email"]
-        label = "TEST" if is_test else "STOCK ALERT"
-        msg = MIMEText(f"{label}: {name} is at {qty} units in {location}.")
-        msg['Subject'] = f"🚨 {label}: {name}"
-        msg['From'], msg['To'] = creds["address"], creds["receiver"]
-        
-        # Resilient Connection (15s Timeout for Office Networks)
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as s:
-            s.starttls()
-            s.login(creds["address"], creds["password"])
-            s.sendmail(creds["address"], creds["receiver"], msg.as_string())
-        
-        # Log Success
-        st.session_state.email_history.append({
-            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "Item": name,
-            "Status": "Sent Successfully"
-        })
-        return True
-    except Exception as e:
-        # Log Failure
-        st.session_state.email_history.append({
-            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "Item": name,
-            "Status": f"Failed: {str(e)}"
-        })
-        return False
-
-# --- 4. DASHBOARD UI ---
+# --- 5. DASHBOARD RENDER ---
 inv_df, log_df = load_data()
 
 if isinstance(inv_df, str):
     st.error(f"Sync Error: {inv_df}"); st.stop()
 
-# Professional Blue Header
 st.markdown('<div class="header-box"><h1>🛡️ EMD Material Inventory Dashboard</h1></div>', unsafe_allow_html=True)
 
-# Metrics
+# Top Metrics
 c1, c2, c3 = st.columns(3)
-c1.metric("Total Line Items", len(inv_df))
-c2.metric("Total Stock Units", int(inv_df['LIVE STOCK'].sum()))
+c1.metric("Catalog Size", len(inv_df))
+c2.metric("Total Stock", int(inv_df['LIVE STOCK'].sum()))
 crit = inv_df[inv_df['LIVE STOCK'] <= 2]
-c3.metric("Low Stock Alerts", len(crit))
+c3.metric("Critical Items", len(crit))
 
-# Sidebar Controls
-st.sidebar.header("⚙️ Control Panel")
-
-# Test Button
-if st.sidebar.button("📧 Send Test Email"):
-    if send_email_alert("TEST_CONNECTION", 99, is_test=True):
-        st.sidebar.success("Test email sent!")
+# Sidebar
+st.sidebar.header("⚙️ Administration")
+if st.sidebar.button("📧 Send Test Signal"):
+    if send_email_alert("TEST_SIGNAL", 99, is_test=True):
+        st.sidebar.success("Signal Received!")
     else:
-        st.sidebar.error("Test failed. Check Email Log tab.")
+        st.sidebar.error("Signal Failed. Check Logs.")
 
-# Filtering
 raw_locs = inv_df['LOCATION'].fillna("Unassigned").astype(str).unique().tolist()
-locs = ["All"] + sorted(raw_locs)
-sel_loc = st.sidebar.selectbox("Filter Location", locs)
+sel_loc = st.sidebar.selectbox("Filter by Zone", ["All"] + sorted(raw_locs))
 
+# Filter Data
 filtered = inv_df.copy()
 if sel_loc != "All":
     filtered = filtered[filtered['LOCATION'].astype(str) == sel_loc]
 
-# Column Logic: Hide 'Total No', Show 'Availability'
+# Column Logic (Hidden Total No)
 cols_to_show = [c for c in ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'LIVE STOCK'] if c in inv_df.columns]
 
-# --- 5. TABS ---
-tab1, tab2, tab3 = st.tabs(["📦 Inventory Grid", "📋 Usage History", "📧 Email Log"])
+# --- 6. MAIN TABS ---
+tab1, tab2, tab3 = st.tabs(["📦 Inventory Grid", "📋 Usage History", "📧 Email Alert Log"])
 
 with tab1:
     st.dataframe(
@@ -161,7 +151,7 @@ with tab1:
         column_config={
             "LIVE STOCK": st.column_config.ProgressColumn(
                 "Availability", 
-                help="Units remaining in stock",
+                help="Units remaining",
                 format="%d", 
                 min_value=0, 
                 max_value=int(inv_df['TOTAL NO'].max() or 100)
@@ -173,14 +163,13 @@ with tab2:
     st.dataframe(log_df, use_container_width=True, hide_index=True)
 
 with tab3:
-    st.caption("System Communication Log (Newest First)")
+    st.subheader("System Transmission Log")
     if st.session_state.email_history:
-        # Reverse order to show newest first
         st.table(pd.DataFrame(st.session_state.email_history).iloc[::-1])
     else:
-        st.info("No email activity recorded in this session.")
+        st.info("No system messages generated yet.")
 
-# Automatic Alert Trigger
+# --- 7. AUTOMATIC ALERTS ---
 for _, r in crit.iterrows():
     alert_key = f"sent_{r['MATERIAL DISCRIPTION']}_{r['LOCATION']}"
     if alert_key not in st.session_state:
