@@ -33,7 +33,6 @@ st.markdown("""
 @st.cache_data(ttl=60)
 def load_data():
     try:
-        # Load Inventory
         inv_raw = pd.read_csv(INV_URL, header=None).fillna("").astype(str)
         h_idx = next((i for i, r in inv_raw.iterrows() if "MATERIAL" in " ".join(r).upper()), None)
         if h_idx is None: return "HEADER_NOT_FOUND", None
@@ -45,7 +44,6 @@ def load_data():
         if 'TOTAL NO' in inv.columns:
             inv['TOTAL NO'] = pd.to_numeric(inv['TOTAL NO'], errors='coerce').fillna(0).astype(int)
 
-        # Usage Log
         log = pd.read_csv(LOG_URL)
         log.columns = [str(c).strip().replace('\n', ' ').upper() for c in log.columns]
         log.columns = [c.replace("DESCRIPTION", "DISCRIPTION") for c in log.columns]
@@ -54,7 +52,6 @@ def load_data():
         if 'QTY_OUT' in log.columns:
             log['QTY_OUT'] = pd.to_numeric(log['QTY_OUT'], errors='coerce').fillna(0).astype(int)
         
-        # Sync Logic
         keys = [k for k in ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION'] if k in inv.columns and k in log.columns]
         cons = log.groupby(keys)['QTY_OUT'].sum().reset_index()
         merged = pd.merge(inv, cons, on=keys, how='left')
@@ -74,7 +71,9 @@ def send_email_alert(name, qty):
             s.login(creds["address"], creds["password"])
             s.sendmail(creds["address"], creds["receiver"], msg.as_string())
         return True
-    except: return False
+    except Exception as e:
+        st.sidebar.error(f"Email Error: {e}")
+        return False
 
 # --- 4. DASHBOARD UI ---
 inv_df, log_df = load_data()
@@ -92,33 +91,28 @@ c2.metric("Total Stock Units", int(inv_df['LIVE STOCK'].sum()))
 crit = inv_df[inv_df['LIVE STOCK'] <= 2]
 c3.metric("Low Stock Alerts", len(crit))
 
-# Email Alerts
-for _, r in crit.iterrows():
-    key = f"sent_{r['MATERIAL DISCRIPTION']}_{r['LOCATION']}"
-    if key not in st.session_state:
-        if send_email_alert(r['MATERIAL DISCRIPTION'], r['LIVE STOCK']):
-            st.session_state[key] = True
+# Sidebar Controls
+st.sidebar.header("⚙️ Control Panel")
 
-# FILTER PANEL - FIXED SORTING
-st.sidebar.header("Filter Panel")
-if 'LOCATION' in inv_df.columns:
-    # Convert all locations to string and fill empty ones to prevent sorting crash
-    raw_locs = inv_df['LOCATION'].fillna("Unassigned").astype(str).unique().tolist()
-    locs = ["All"] + sorted(raw_locs)
-else:
-    locs = ["All"]
+# Diagnostic: Test Email Button
+if st.sidebar.button("📧 Send Test Email"):
+    if send_email_alert("TEST ITEM", 99):
+        st.sidebar.success("Test email sent successfully!")
+    else:
+        st.sidebar.error("Test email failed. Check Secrets.")
 
+# Filter
+raw_locs = inv_df['LOCATION'].fillna("Unassigned").astype(str).unique().tolist()
+locs = ["All"] + sorted(raw_locs)
 sel_loc = st.sidebar.selectbox("Select Location", locs)
 
-# Apply Filter
 filtered = inv_df.copy()
 if sel_loc != "All":
     filtered = filtered[filtered['LOCATION'].astype(str) == sel_loc]
 
-# Dynamic Column Selection
-cols_to_show = [c for c in ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'TOTAL NO', 'LIVE STOCK'] if c in inv_df.columns]
-
-
+# --- MODIFIED: ONLY AVAILABILITY SHOWN ---
+# 'TOTAL NO' is removed from this list so it is invisible in the table
+cols_to_show = [c for c in ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'LIVE STOCK'] if c in inv_df.columns]
 
 tab1, tab2 = st.tabs(["📦 Inventory Grid", "📋 Usage History"])
 
@@ -127,7 +121,15 @@ with tab1:
         filtered[cols_to_show],
         use_container_width=True,
         hide_index=True,
-        column_config={"LIVE STOCK": st.column_config.ProgressColumn("Availability", format="%d", min_value=0, max_value=int(inv_df['TOTAL NO'].max() or 100))}
+        column_config={
+            "LIVE STOCK": st.column_config.ProgressColumn(
+                "Availability", 
+                help="Units remaining in stock",
+                format="%d", 
+                min_value=0, 
+                max_value=int(inv_df['TOTAL NO'].max() or 100)
+            )
+        }
     )
 
 with tab2:
