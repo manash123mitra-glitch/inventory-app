@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import smtplib
-import time
+import socket
 from email.mime.text import MIMEText
 from datetime import datetime
 
@@ -19,7 +19,6 @@ st.set_page_config(page_title="EMD Material Dashboard", layout="wide", page_icon
 if "email_history" not in st.session_state:
     st.session_state.email_history = []
 
-# Professional Light Theme CSS
 st.markdown("""
 <style>
     .stApp { background-color: #f8f9fa; }
@@ -32,12 +31,10 @@ st.markdown("""
         background-color: white; padding: 15px; border-radius: 10px;
         border-left: 5px solid #1e3c72; box-shadow: 0 2px 5px rgba(0,0,0,0.05);
     }
-    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #fff; border-radius: 5px; padding: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. DUAL-PORT EMAIL ENGINE ---
+# --- 3. THE RESILIENT EMAIL ENGINE ---
 def send_email_alert(name, qty, location="N/A", is_test=False):
     try:
         creds = st.secrets["email"]
@@ -48,29 +45,41 @@ def send_email_alert(name, qty, location="N/A", is_test=False):
         
         status = "Failed"
         
-        # ATTEMPT 1: PORT 587 (Standard)
+        # DNS Check: Can the network see Google?
         try:
-            with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as s:
+            socket.gethostbyname("smtp.gmail.com")
+            dns_status = "DNS OK"
+        except:
+            dns_status = "DNS BLOCKED"
+
+        # Try Port 587 (Standard)
+        try:
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=15, local_hostname='localhost') as s:
                 s.starttls()
                 s.login(creds["address"], creds["password"])
                 s.sendmail(creds["address"], creds["receiver"], msg.as_string())
-            status = "Sent (Port 587)"
+            status = f"Sent (587) | {dns_status}"
         except:
-            # ATTEMPT 2: PORT 465 (Office Bypass)
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as s:
+            # Try Port 465 (SSL Bypass)
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as s:
                 s.login(creds["address"], creds["password"])
                 s.sendmail(creds["address"], creds["receiver"], msg.as_string())
-            status = "Sent (Port 465)"
+            status = f"Sent (465) | {dns_status}"
 
         st.session_state.email_history.append({
             "Timestamp": datetime.now().strftime("%H:%M:%S"),
-            "Item": name, "Location": location, "Status": status
+            "Item": name, "Status": status
         })
         return True
+
     except Exception as e:
+        error_msg = str(e)
+        if "timeout" in error_msg.lower():
+            error_msg = "OFFICE FIREWALL BLOCKING PORTS"
+            
         st.session_state.email_history.append({
             "Timestamp": datetime.now().strftime("%H:%M:%S"),
-            "Item": name, "Status": f"FAILED: {str(e)}"
+            "Item": name, "Status": f"CRITICAL: {error_msg}"
         })
         return False
 
@@ -106,7 +115,7 @@ def load_data():
         return merged, log
     except Exception as e: return str(e), None
 
-# --- 5. DASHBOARD RENDER ---
+# --- 5. UI RENDER ---
 inv_df, log_df = load_data()
 
 if isinstance(inv_df, str):
@@ -117,30 +126,28 @@ st.markdown('<div class="header-box"><h1>🛡️ EMD Material Inventory Dashboar
 # Top Metrics
 c1, c2, c3 = st.columns(3)
 c1.metric("Catalog Size", len(inv_df))
-c2.metric("Total Stock", int(inv_df['LIVE STOCK'].sum()))
+c2.metric("Total Stock Units", int(inv_df['LIVE STOCK'].sum()))
 crit = inv_df[inv_df['LIVE STOCK'] <= 2]
-c3.metric("Critical Items", len(crit))
+c3.metric("Critical Alerts", len(crit))
 
 # Sidebar
-st.sidebar.header("⚙️ Administration")
+st.sidebar.header("⚙️ System Control")
 if st.sidebar.button("📧 Send Test Signal"):
-    if send_email_alert("TEST_SIGNAL", 99, is_test=True):
-        st.sidebar.success("Signal Received!")
+    if send_email_alert("TEST_CONNECTION", 99, is_test=True):
+        st.sidebar.success("Signal Sent!")
     else:
-        st.sidebar.error("Signal Failed. Check Logs.")
+        st.sidebar.error("Signal Blocked. Check Logs.")
 
-raw_locs = inv_df['LOCATION'].fillna("Unassigned").astype(str).unique().tolist()
-sel_loc = st.sidebar.selectbox("Filter by Zone", ["All"] + sorted(raw_locs))
+loc_list = sorted(inv_df['LOCATION'].fillna("Unassigned").astype(str).unique().tolist())
+sel_loc = st.sidebar.selectbox("Filter Location", ["All"] + loc_list)
 
-# Filter Data
 filtered = inv_df.copy()
 if sel_loc != "All":
     filtered = filtered[filtered['LOCATION'].astype(str) == sel_loc]
 
-# Column Logic (Hidden Total No)
 cols_to_show = [c for c in ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'LIVE STOCK'] if c in inv_df.columns]
 
-# --- 6. MAIN TABS ---
+# --- 6. TABS ---
 tab1, tab2, tab3 = st.tabs(["📦 Inventory Grid", "📋 Usage History", "📧 Email Alert Log"])
 
 with tab1:
@@ -148,28 +155,20 @@ with tab1:
         filtered[cols_to_show],
         use_container_width=True,
         hide_index=True,
-        column_config={
-            "LIVE STOCK": st.column_config.ProgressColumn(
-                "Availability", 
-                help="Units remaining",
-                format="%d", 
-                min_value=0, 
-                max_value=int(inv_df['TOTAL NO'].max() or 100)
-            )
-        }
+        column_config={"LIVE STOCK": st.column_config.ProgressColumn("Availability", format="%d", min_value=0, max_value=int(inv_df['TOTAL NO'].max() or 100))}
     )
 
 with tab2:
     st.dataframe(log_df, use_container_width=True, hide_index=True)
 
 with tab3:
-    st.subheader("System Transmission Log")
+    st.subheader("Transmission History")
     if st.session_state.email_history:
         st.table(pd.DataFrame(st.session_state.email_history).iloc[::-1])
     else:
-        st.info("No system messages generated yet.")
+        st.info("No activity recorded yet.")
 
-# --- 7. AUTOMATIC ALERTS ---
+# --- 7. AUTO TRIGGER ---
 for _, r in crit.iterrows():
     alert_key = f"sent_{r['MATERIAL DISCRIPTION']}_{r['LOCATION']}"
     if alert_key not in st.session_state:
