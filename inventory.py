@@ -1,11 +1,10 @@
 import streamlit as st
 import pandas as pd
 import smtplib
-import socket
 from email.mime.text import MIMEText
 from datetime import datetime
 
-# --- 1. SETTINGS & GIDs ---
+# --- 1. SETTINGS ---
 SHEET_ID = "1E0ZluX3o7vqnSBAdAMEn_cdxq3ro4F4DXxchOEFcS_g"
 INV_GID = "804871972" 
 LOG_GID = "1151083374" 
@@ -13,7 +12,7 @@ LOG_GID = "1151083374"
 INV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={INV_GID}"
 LOG_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={LOG_GID}"
 
-# --- 2. UI CONFIG & CSS ---
+# --- 2. UI CONFIG ---
 st.set_page_config(page_title="EMD Material Dashboard", layout="wide", page_icon="🛡️")
 
 if "email_history" not in st.session_state:
@@ -25,16 +24,15 @@ st.markdown("""
     .header-box {
         background: linear-gradient(90deg, #1e3c72 0%, #2a5298 100%);
         padding: 20px; border-radius: 10px; color: white;
-        text-align: center; margin-bottom: 30px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        text-align: center; margin-bottom: 30px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. HYPER-RESILIENT EMAIL ENGINE ---
+# --- 3. THE "STANDARD" EMAIL ENGINE (Best for Private Networks) ---
 def send_email_alert(name, qty, location="N/A", is_test=False):
     try:
         if "email" not in st.secrets:
-            st.session_state.email_history.append({"Timestamp": datetime.now().strftime("%H:%M:%S"), "Item": name, "Status": "MISSING SECRETS"})
             return False
             
         creds = st.secrets["email"]
@@ -43,118 +41,79 @@ def send_email_alert(name, qty, location="N/A", is_test=False):
         msg['Subject'] = f"🚨 {label}: {name}"
         msg['From'], msg['To'] = creds["address"], creds["receiver"]
         
-        # Try SSL (Port 465) - Generally most stable for Gmail + Streamlit
-        try:
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as s:
-                s.login(creds["address"], creds["password"])
-                s.sendmail(creds["address"], creds["receiver"], msg.as_string())
-            status = "Success (SSL/465)"
-        except Exception as e_ssl:
-            # Fallback to TLS (Port 587)
-            with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as s:
-                s.starttls()
-                s.login(creds["address"], creds["password"])
-                s.sendmail(creds["address"], creds["receiver"], msg.as_string())
-            status = "Success (TLS/587)"
-
-        st.session_state.email_history.append({
-            "Timestamp": datetime.now().strftime("%H:%M:%S"),
-            "Item": name, "Status": status
-        })
+        # Standard Port 465 SSL - The most "normal" way to send via Gmail
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as s:
+            s.login(creds["address"], creds["password"])
+            s.sendmail(creds["address"], creds["receiver"], msg.as_string())
+        
+        status = "Success"
+        st.session_state.email_history.append({"Timestamp": datetime.now().strftime("%H:%M:%S"), "Item": name, "Status": status})
         return True
 
     except Exception as e:
-        error_msg = str(e)
-        if "authentication" in error_msg.lower():
-            error_msg = "WRONG APP PASSWORD - Update Secrets"
-        elif "timeout" in error_msg.lower():
-            error_msg = "OFFICE FIREWALL BLOCKING CONNECTION"
-            
-        st.session_state.email_history.append({
-            "Timestamp": datetime.now().strftime("%H:%M:%S"),
-            "Item": name, "Status": f"ERROR: {error_msg}"
-        })
+        err_msg = str(e)
+        st.session_state.email_history.append({"Timestamp": datetime.now().strftime("%H:%M:%S"), "Item": name, "Status": f"Error: {err_msg}"})
         return False
 
-# --- 4. DATA LOADING ENGINE ---
+# --- 4. DATA LOADING ---
 @st.cache_data(ttl=60)
 def load_data():
     try:
         inv_raw = pd.read_csv(INV_URL, header=None).fillna("").astype(str)
         h_idx = next((i for i, r in inv_raw.iterrows() if "MATERIAL" in " ".join(r).upper()), None)
-        if h_idx is None: return "HEADER_NOT_FOUND", None
         inv = pd.read_csv(INV_URL, skiprows=h_idx)
-        inv.columns = [str(c).strip().replace('\n', ' ').upper() for c in inv.columns]
-        inv.columns = [c.replace("DESCRIPTION", "DISCRIPTION") for c in inv.columns]
+        inv.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in inv.columns]
+        
         if 'TOTAL NO' in inv.columns:
             inv['TOTAL NO'] = pd.to_numeric(inv['TOTAL NO'], errors='coerce').fillna(0).astype(int)
+        
         log = pd.read_csv(LOG_URL)
-        log.columns = [str(c).strip().replace('\n', ' ').upper() for c in log.columns]
-        log.columns = [c.replace("DESCRIPTION", "DISCRIPTION") for c in log.columns]
+        log.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in log.columns]
         log = log.rename(columns={'QUANTITY ISSUED': 'QTY_OUT'})
+        
         if 'QTY_OUT' in log.columns:
             log['QTY_OUT'] = pd.to_numeric(log['QTY_OUT'], errors='coerce').fillna(0).astype(int)
+        
         keys = [k for k in ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION'] if k in inv.columns and k in log.columns]
         cons = log.groupby(keys)['QTY_OUT'].sum().reset_index()
-        merged = pd.merge(inv, cons, on=keys, how='left')
-        merged['QTY_OUT'] = merged['QTY_OUT'].fillna(0)
+        merged = pd.merge(inv, cons, on=keys, how='left').fillna(0)
         merged['LIVE STOCK'] = merged['TOTAL NO'] - merged['QTY_OUT']
         return merged, log
     except Exception as e: return str(e), None
 
-# --- 5. UI RENDER ---
+# --- 5. RENDER ---
 inv_df, log_df = load_data()
-if isinstance(inv_df, str):
-    st.error(f"Sync Error: {inv_df}"); st.stop()
+if isinstance(inv_df, str): st.error(inv_df); st.stop()
 
 st.markdown('<div class="header-box"><h1>🛡️ EMD Material Inventory Dashboard</h1></div>', unsafe_allow_html=True)
 
-# Metrics
 c1, c2, c3 = st.columns(3)
 c1.metric("Catalog Size", len(inv_df))
-c2.metric("Total Stock Units", int(inv_df['LIVE STOCK'].sum()))
+c2.metric("Total Stock", int(inv_df['LIVE STOCK'].sum()))
 crit = inv_df[inv_df['LIVE STOCK'] <= 2]
 c3.metric("Critical Alerts", len(crit))
 
-# Sidebar
-st.sidebar.header("⚙️ System Control")
+st.sidebar.header("⚙️ Settings")
 if st.sidebar.button("📧 Send Test Signal"):
-    if send_email_alert("TEST_CONNECTION", 99, is_test=True):
+    if send_email_alert("MANUAL_TEST", 99, is_test=True):
         st.sidebar.success("Signal Sent!")
     else:
-        st.sidebar.error("Signal Blocked. Check Logs.")
-
-loc_list = sorted(inv_df['LOCATION'].fillna("Unassigned").astype(str).unique().tolist())
-sel_loc = st.sidebar.selectbox("Filter Location", ["All"] + loc_list)
-
-filtered = inv_df.copy()
-if sel_loc != "All":
-    filtered = filtered[filtered['LOCATION'].astype(str) == sel_loc]
+        st.sidebar.error("Signal Failed.")
 
 cols_to_show = [c for c in ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'LIVE STOCK'] if c in inv_df.columns]
-
-# --- 6. TABS ---
-tab1, tab2, tab3 = st.tabs(["📦 Inventory Grid", "📋 Usage History", "📧 Email Alert Log"])
+tab1, tab2, tab3 = st.tabs(["📦 Inventory", "📋 Usage", "📧 Logs"])
 
 with tab1:
-    st.dataframe(
-        filtered[cols_to_show], use_container_width=True, hide_index=True,
-        column_config={"LIVE STOCK": st.column_config.ProgressColumn("Availability", format="%d", min_value=0, max_value=int(inv_df['TOTAL NO'].max() or 100))}
-    )
-
-with tab2:
-    st.dataframe(log_df, use_container_width=True, hide_index=True)
-
+    st.dataframe(filtered := inv_df[cols_to_show], use_container_width=True, hide_index=True,
+                 column_config={"LIVE STOCK": st.column_config.ProgressColumn("Availability", format="%d", min_value=0, max_value=int(inv_df['TOTAL NO'].max() or 100))})
+with tab2: st.dataframe(log_df, use_container_width=True, hide_index=True)
 with tab3:
-    st.subheader("Transmission History")
-    if st.session_state.email_history:
-        st.table(pd.DataFrame(st.session_state.email_history).iloc[::-1])
-    else:
-        st.info("No activity recorded yet.")
+    if st.session_state.email_history: st.table(pd.DataFrame(st.session_state.email_history).iloc[::-1])
+    else: st.info("No logs.")
 
-# --- 7. AUTO TRIGGER ---
+# Auto Alerts
 for _, r in crit.iterrows():
-    alert_key = f"sent_{r['MATERIAL DISCRIPTION']}_{r['LOCATION']}"
-    if alert_key not in st.session_state:
+    k = f"s_{r['MATERIAL DISCRIPTION']}_{r['LOCATION']}"
+    if k not in st.session_state:
         if send_email_alert(r['MATERIAL DISCRIPTION'], r['LIVE STOCK'], r['LOCATION']):
-            st.session_state[alert_key] = True
+            st.session_state[k] = True
