@@ -19,14 +19,12 @@ LOG_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&
 
 st.set_page_config(page_title="EMD Material Dashboard", layout="wide", page_icon="🛡️")
 
-# --- 2. PERSISTENT MEMORY (The Fix) ---
-# This class stays alive on the server even if you close your browser.
+# --- 2. PERSISTENT MEMORY (Prevents Email Spam) ---
 @st.cache_resource
 class EmailTracker:
     def __init__(self):
         self.last_sent_date = None
 
-# Initialize the global tracker
 tracker = EmailTracker()
 
 # --- 3. EMAIL ENGINE ---
@@ -105,38 +103,67 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
+# Identify Critical Items
+crit = inv_df[inv_df['LIVE STOCK'] <= 2]
+
 c1, c2, c3 = st.columns(3)
 c1.metric("Catalog Items", len(inv_df))
 c2.metric("Total Stock", int(inv_df['LIVE STOCK'].sum()))
-crit = inv_df[inv_df['LIVE STOCK'] <= 2]
-c3.metric("Critical Alerts", len(crit))
+c3.metric("Critical Alerts", len(crit), delta=f"{len(crit)} Items Low", delta_color="inverse")
 
-# Sidebar Info
+# Sidebar Status
 st.sidebar.header("⚙️ Status Panel")
 current_time_str = datetime.now(IST).strftime("%I:%M %p")
 st.sidebar.write(f"🕒 Time: {current_time_str}")
 
-if tracker.last_sent_date == datetime.now(IST).strftime("%Y-%m-%d"):
-    st.sidebar.success("✅ Daily Email: SENT")
+today_str = datetime.now(IST).strftime("%Y-%m-%d")
+if tracker.last_sent_date == today_str:
+    st.sidebar.success("✅ Email Sent Today")
 else:
-    st.sidebar.warning("⏳ Daily Email: PENDING")
+    st.sidebar.info("⏳ Email Pending (9 AM)")
 
-# Filter
+# Filters
 loc_list = sorted(inv_df['LOCATION'].replace('nan', 'Unassigned').unique().tolist())
 sel_loc = st.sidebar.selectbox("Filter Location", ["All"] + loc_list)
 filtered_inv = inv_df.copy()
 if sel_loc != "All":
     filtered_inv = filtered_inv[filtered_inv['LOCATION'] == sel_loc]
 
-# Tabs
-tab1, tab2 = st.tabs(["📦 Inventory Overview", "📋 Usage Logs"])
+# --- TABS ---
+tab1, tab2, tab3 = st.tabs(["📦 Inventory Overview", "🚨 Critical Stock (Action Req.)", "📋 Usage Logs"])
 
+# TAB 1: ALL INVENTORY
 with tab1:
     cols = [c for c in ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'LIVE STOCK'] if c in inv_df.columns]
     st.dataframe(filtered_inv[cols], use_container_width=True, hide_index=True,
                  column_config={"LIVE STOCK": st.column_config.ProgressColumn("Availability", format="%d", min_value=0, max_value=int(inv_df['TOTAL NO'].max() or 100))})
 
+# TAB 2: CRITICAL STOCK (NEW)
 with tab2:
+    if not crit.empty:
+        st.error(f"⚠️ Action Required: {len(crit)} items are at or below Minimum Stock Level (2).")
+        
+        # Display Critical Table
+        crit_cols = [c for c in ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'LIVE STOCK'] if c in inv_df.columns]
+        st.dataframe(crit[crit_cols], use_container_width=True, hide_index=True)
+        
+        # Download Button
+        csv = crit[crit_cols].to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download Critical List (CSV)",
+            data=csv,
+            file_name=f"Critical_Stock_{today_str}.csv",
+            mime='text/csv',
+        )
+    else:
+        st.success("✅ All Stock Levels are Healthy.")
+
+# TAB 3: USAGE LOGS
+with tab2: # Note: This should be tab3 logic, fixing indent below
+    pass 
+
+with tab3:
+    st.markdown("### 🔍 Material Drawal History")
     search_term = st.text_input("Search Logs", placeholder="Name or Item...")
     display_log = log_df.copy()
     if search_term:
@@ -144,38 +171,19 @@ with tab2:
     st.dataframe(display_log, use_container_width=True, hide_index=True)
 
 
-# --- 6. THE "GLOBAL LOCK" EMAIL LOGIC ---
-# This is the logic that prevents spam. 
-
-today_str = datetime.now(IST).strftime("%Y-%m-%d")
+# --- 6. EMAIL LOGIC (ONCE A DAY) ---
 current_hour = datetime.now(IST).hour
-
-# Condition 1: Is it today's email already sent globally?
 email_already_sent_today = (tracker.last_sent_date == today_str)
-
-# Condition 2: Is it past 9 AM?
 is_time = (current_hour >= 9)
-
-# Condition 3: Are there items to send?
 items_exist = not crit.empty
 
-# EXECUTE
 if is_time and items_exist and not email_already_sent_today:
     
-    # Create List
     clist = []
     for _, r in crit.iterrows():
         clist.append({'name': r['MATERIAL DISCRIPTION'], 'qty': r['LIVE STOCK'], 'loc': r['LOCATION']})
     
-    # Send
     if send_daily_summary_email(clist):
-        # *** UPDATE GLOBAL MEMORY ***
         tracker.last_sent_date = today_str 
         st.toast(f"✅ Daily Summary Sent ({len(clist)} items)")
         st.sidebar.success("✅ Daily Email: SENT")
-    else:
-        st.toast("⚠️ Daily Email Failed")
-
-elif email_already_sent_today:
-    # If already sent, do nothing. Just show status.
-    pass
