@@ -12,7 +12,6 @@ SHEET_ID = "1E0ZluX3o7vqnSBAdAMEn_cdxq3ro4F4DXxchOEFcS_g"
 INV_GID = "804871972" 
 LOG_GID = "1151083374" 
 
-# Define India Timezone
 IST = pytz.timezone('Asia/Kolkata')
 
 INV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={INV_GID}"
@@ -33,40 +32,16 @@ def send_daily_summary_email(items_list):
     try:
         if "email" not in st.secrets: return False
         creds = st.secrets["email"]
-        
         today_str = datetime.now(IST).strftime("%d-%b-%Y")
-        
         msg = MIMEMultipart("alternative")
         msg['Subject'] = f"🛡️ Daily Stock Alert ({today_str}): {len(items_list)} Items Critical"
         msg['From'], msg['To'] = creds["address"], creds["receiver"]
 
-        html_content = f"""
-        <html>
-        <head>
-            <style>
-                table {{ border-collapse: collapse; width: 100%; font-family: Arial, sans-serif; }}
-                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                th {{ background-color: #f2f2f2; color: #333; }}
-                tr:nth-child(even) {{ background-color: #f9f9f9; }}
-            </style>
-        </head>
-        <body>
-            <h2 style="color: #d9534f;">🚨 Critical Stock Report ({today_str})</h2>
-            <p>The following items are low on stock:</p>
-            <table>
-                <tr><th>Material Description</th><th>Stock</th><th>Location</th></tr>
-        """
-        
-        count = 0
+        html_content = f"<html><body><h2 style='color: #d9534f;'>🚨 Critical Stock Report</h2><table border='1' style='border-collapse: collapse; width: 100%;'><tr><th>Material</th><th>Stock</th><th>Location</th></tr>"
         for item in items_list:
-            if str(item['name']).lower() in ['nan', '']: continue
-            html_content += f"<tr><td>{item['name']}</td><td style='font-weight: bold; color: #d9534f;'>{item['qty']}</td><td>{item['loc']}</td></tr>"
-            count += 1
-            
+            html_content += f"<tr><td>{item['name']}</td><td>{item['qty']}</td><td>{item['loc']}</td></tr>"
         html_content += "</table></body></html>"
         
-        if count == 0: return False
-
         msg.attach(MIMEText(html_content, "html"))
         context = ssl.create_default_context()
         context.check_hostname = False
@@ -82,20 +57,15 @@ def send_daily_summary_email(items_list):
 @st.cache_data(ttl=60)
 def load_data():
     try:
-        # Load Inventory
         inv_raw = pd.read_csv(INV_URL, header=None).fillna("").astype(str)
         h_idx = next((i for i, r in inv_raw.iterrows() if "MATERIAL" in " ".join(r).upper()), None)
-        if h_idx is None: return "Header Missing", None
-        
         inv = pd.read_csv(INV_URL, skiprows=h_idx)
         inv.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in inv.columns]
         
-        # Load Logs
         log = pd.read_csv(LOG_URL)
         log.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in log.columns]
-        log = log.rename(columns={'QUANTITY ISSUED': 'QTY_OUT', 'ISSUED QUANTITY': 'QTY_OUT', 'QTY': 'QTY_OUT'})
+        log = log.rename(columns={'QUANTITY ISSUED': 'QTY_OUT', 'QTY': 'QTY_OUT'})
 
-        # Type Safety
         merge_keys = ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION']
         valid_keys = [k for k in merge_keys if k in inv.columns and k in log.columns]
         
@@ -103,127 +73,72 @@ def load_data():
             inv[k] = inv[k].astype(str).str.strip()
             log[k] = log[k].astype(str).str.strip()
 
-        # Numerics
         if 'TOTAL NO' in inv.columns:
             inv['TOTAL NO'] = pd.to_numeric(inv['TOTAL NO'], errors='coerce').fillna(0).astype(int)
         if 'QTY_OUT' in log.columns:
             log['QTY_OUT'] = pd.to_numeric(log['QTY_OUT'], errors='coerce').fillna(0).astype(int)
 
-        # Merge
         cons = log.groupby(valid_keys)['QTY_OUT'].sum().reset_index()
         merged = pd.merge(inv, cons, on=valid_keys, how='left').fillna(0)
         merged['LIVE STOCK'] = merged['TOTAL NO'] - merged['QTY_OUT']
-        
         return merged, log
     except Exception as e: return str(e), None
 
-# --- 5. DASHBOARD UI ---
+# --- 5. UI ---
 inv_df, log_df = load_data()
 if isinstance(inv_df, str): st.error(inv_df); st.stop()
 
-st.markdown("""
-    <div style='background: linear-gradient(90deg, #1e3c72 0%, #2a5298 100%); padding: 20px; border-radius: 10px; color: white; text-align: center; margin-bottom: 20px;'>
-        <h1>🛡️ EMD Material Dashboard</h1>
-    </div>
-""", unsafe_allow_html=True)
-
-# Critical Calculation (Cleaned)
+st.markdown("<h1 style='text-align: center; color: #1e3c72;'>🛡️ EMD Material Dashboard</h1>", unsafe_allow_html=True)
 crit = inv_df[(inv_df['LIVE STOCK'] <= 2) & (inv_df['MATERIAL DISCRIPTION'] != 'nan') & (inv_df['MATERIAL DISCRIPTION'] != '')]
 
-c1, c2, c3 = st.columns(3)
-c1.metric("Catalog Items", len(inv_df))
-c2.metric("Total Stock", int(inv_df['LIVE STOCK'].sum()))
-c3.metric("Critical Alerts", len(crit), delta=f"{len(crit)} Low", delta_color="inverse")
-
 # Sidebar
-st.sidebar.header("⚙️ Settings")
 loc_list = sorted(inv_df['LOCATION'].replace('nan', 'Unassigned').unique().tolist())
 sel_loc = st.sidebar.selectbox("Filter Location", ["All"] + loc_list)
 filtered_inv = inv_df.copy()
 if sel_loc != "All":
     filtered_inv = filtered_inv[filtered_inv['LOCATION'] == sel_loc]
 
-# --- TABS ---
-tab1, tab2, tab3 = st.tabs(["📦 Inventory Overview", "🚨 Critical Stock (Action Req.)", "📋 Usage Logs"])
+tab1, tab2, tab3 = st.tabs(["📦 Inventory", "🚨 Critical", "📋 Usage Log"])
 
-# TAB 1: INVENTORY
 with tab1:
-    cols = [c for c in ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'LIVE STOCK'] if c in inv_df.columns]
-    st.dataframe(
-        filtered_inv[cols], 
-        use_container_width=True, 
-        hide_index=True,
-        column_config={"LIVE STOCK": st.column_config.ProgressColumn("Availability", format="%d", min_value=0, max_value=int(inv_df['TOTAL NO'].max() or 100))}
-    )
+    st.dataframe(filtered_inv, use_container_width=True, hide_index=True)
 
-# TAB 2: CRITICAL STOCK
 with tab2:
-    if not crit.empty:
-        st.error(f"⚠️ Action Required: {len(crit)} items are at or below Minimum Stock Level (2).")
-        crit_cols = [c for c in ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'LIVE STOCK'] if c in inv_df.columns]
-        st.dataframe(crit[crit_cols], use_container_width=True, hide_index=True)
-        
-        csv = crit[crit_cols].to_csv(index=False).encode('utf-8')
-        st.download_button(label="📥 Download Critical List (CSV)", data=csv, file_name=f"Critical_Stock.csv", mime='text/csv')
-    else:
-        st.success("✅ All Stock Levels are Healthy.")
+    st.dataframe(crit, use_container_width=True, hide_index=True)
 
-# TAB 3: USAGE LOGS (PERFECT FIT)
+# --- TAB 3: THE FORMATTING FIX ---
 with tab3:
-    st.markdown("### 🔍 Material Drawal History")
+    st.markdown("### 📋 Material Drawal History")
     
-    # 1. Clean Garbage Rows
-    # Remove rows where all columns are empty or description is nan
-    display_log = log_df.copy()
-    display_log = display_log[display_log['MATERIAL DISCRIPTION'].notna()]
-    display_log = display_log[display_log['MATERIAL DISCRIPTION'].str.len() > 1]
+    # 1. Cleaning
+    clean_log = log_df.copy().replace('nan', '')
+    clean_log = clean_log[clean_log['MATERIAL DISCRIPTION'].str.len() > 1]
     
-    # 2. Clean Garbage Values (Replace "nan" text with actual empty space for cleaner look)
-    display_log = display_log.replace('nan', '')
+    # 2. Search
+    search = st.text_input("Search Logs...")
+    if search:
+        clean_log = clean_log[clean_log.apply(lambda r: search.upper() in r.astype(str).str.upper().to_string(), axis=1)]
 
-    # 3. Rename core columns for display (keep others as is)
-    display_log = display_log.rename(columns={
-        'MATERIAL DISCRIPTION': 'MATERIAL NAME',
-        'QTY_OUT': 'QTY'
-    })
-
-    # Search Logic
-    search_term = st.text_input("Search Logs", placeholder="Type Name, Item, or Date...")
-    if search_term:
-        display_log = display_log[display_log.apply(lambda row: search_term.upper() in row.astype(str).str.upper().to_string(), axis=1)]
-    
-    # 4. DISPLAY WITH "PERFECT FIT" CONFIG
-    # This configuration forces all columns to behave politely.
+    # 3. DISPLAY WITH WRAPPING & AUTO-WIDTH
+    # This configuration forces columns to be wide enough or wrap text to fit.
     st.dataframe(
-        display_log,
+        clean_log,
         use_container_width=True,
         hide_index=True,
         column_config={
-            # Force Description to be Medium width (truncates nicely instead of wrapping)
-            "MATERIAL NAME": st.column_config.TextColumn("Material Name", width="medium"),
-            
-            # Force Qty to be small number
-            "QTY": st.column_config.NumberColumn("Qty", format="%d", width="small"),
-            
-            # Force Date to be small text
             "DATE": st.column_config.TextColumn("Date", width="small"),
-            
-            # Catch-all for other columns to prevent them from exploding
-            "REMARKS": st.column_config.TextColumn("Remarks", width="medium"),
-            "ISSUED TO": st.column_config.TextColumn("Issued To", width="medium")
+            "MATERIAL DISCRIPTION": st.column_config.TextColumn("Material Name", width="large"),
+            "MAKE": st.column_config.TextColumn("Make", width="medium"),
+            "SIZE": st.column_config.TextColumn("Size", width="medium"),
+            "QTY_OUT": st.column_config.NumberColumn("Qty", width="small"),
+            "REMARKS": st.column_config.TextColumn("Remarks", width="large"),
         }
     )
 
 # --- 6. EMAIL LOGIC ---
-today_str = datetime.now(IST).strftime("%Y-%m-%d")
-current_hour = datetime.now(IST).hour
-if (current_hour >= 9) and (tracker.last_sent_date != today_str) and not crit.empty:
-    clist = []
-    for _, r in crit.iterrows():
-        if str(r['MATERIAL DISCRIPTION']).lower() not in ['nan', '']:
-            clist.append({'name': r['MATERIAL DISCRIPTION'], 'qty': r['LIVE STOCK'], 'loc': r['LOCATION']})
-    
-    if clist:
-        if send_daily_summary_email(clist):
-            tracker.last_sent_date = today_str 
-            st.toast(f"✅ Daily Summary Sent ({len(clist)} items)")
+today = datetime.now(IST).strftime("%Y-%m-%d")
+if datetime.now(IST).hour >= 9 and tracker.last_sent_date != today and not crit.empty:
+    clist = [{'name': r['MATERIAL DISCRIPTION'], 'qty': r['LIVE STOCK'], 'loc': r['LOCATION']} for _, r in crit.iterrows()]
+    if send_daily_summary_email(clist):
+        tracker.last_sent_date = today
+        st.toast("✅ Daily Summary Sent")
