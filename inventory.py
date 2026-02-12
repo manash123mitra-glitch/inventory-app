@@ -12,6 +12,7 @@ SHEET_ID = "1E0ZluX3o7vqnSBAdAMEn_cdxq3ro4F4DXxchOEFcS_g"
 INV_GID = "804871972" 
 LOG_GID = "1151083374" 
 
+# Define India Timezone
 IST = pytz.timezone('Asia/Kolkata')
 
 INV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={INV_GID}"
@@ -32,6 +33,7 @@ def send_daily_summary_email(items_list):
     try:
         if "email" not in st.secrets: return False
         creds = st.secrets["email"]
+        
         today_str = datetime.now(IST).strftime("%d-%b-%Y")
         
         msg = MIMEMultipart("alternative")
@@ -80,7 +82,7 @@ def send_daily_summary_email(items_list):
 @st.cache_data(ttl=60)
 def load_data():
     try:
-        # Inventory
+        # Load Inventory
         inv_raw = pd.read_csv(INV_URL, header=None).fillna("").astype(str)
         h_idx = next((i for i, r in inv_raw.iterrows() if "MATERIAL" in " ".join(r).upper()), None)
         if h_idx is None: return "Header Missing", None
@@ -88,7 +90,7 @@ def load_data():
         inv = pd.read_csv(INV_URL, skiprows=h_idx)
         inv.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in inv.columns]
         
-        # Logs
+        # Load Logs
         log = pd.read_csv(LOG_URL)
         log.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in log.columns]
         log = log.rename(columns={'QUANTITY ISSUED': 'QTY_OUT', 'ISSUED QUANTITY': 'QTY_OUT', 'QTY': 'QTY_OUT'})
@@ -125,6 +127,7 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
+# Critical Calculation (Cleaned)
 crit = inv_df[(inv_df['LIVE STOCK'] <= 2) & (inv_df['MATERIAL DISCRIPTION'] != 'nan') & (inv_df['MATERIAL DISCRIPTION'] != '')]
 
 c1, c2, c3 = st.columns(3)
@@ -140,14 +143,18 @@ filtered_inv = inv_df.copy()
 if sel_loc != "All":
     filtered_inv = filtered_inv[filtered_inv['LOCATION'] == sel_loc]
 
-# TABS
+# --- TABS ---
 tab1, tab2, tab3 = st.tabs(["📦 Inventory Overview", "🚨 Critical Stock (Action Req.)", "📋 Usage Logs"])
 
-# TAB 1: ALL INVENTORY
+# TAB 1: INVENTORY
 with tab1:
     cols = [c for c in ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'LIVE STOCK'] if c in inv_df.columns]
-    st.dataframe(filtered_inv[cols], use_container_width=True, hide_index=True,
-                 column_config={"LIVE STOCK": st.column_config.ProgressColumn("Availability", format="%d", min_value=0, max_value=int(inv_df['TOTAL NO'].max() or 100))})
+    st.dataframe(
+        filtered_inv[cols], 
+        use_container_width=True, 
+        hide_index=True,
+        column_config={"LIVE STOCK": st.column_config.ProgressColumn("Availability", format="%d", min_value=0, max_value=int(inv_df['TOTAL NO'].max() or 100))}
+    )
 
 # TAB 2: CRITICAL STOCK
 with tab2:
@@ -161,44 +168,49 @@ with tab2:
     else:
         st.success("✅ All Stock Levels are Healthy.")
 
-# TAB 3: USAGE LOGS (FIXED LAYOUT)
+# TAB 3: USAGE LOGS (PERFECT FIT)
 with tab3:
     st.markdown("### 🔍 Material Drawal History")
     
-    # Clean Data
-    display_log = log_df[log_df['MATERIAL DISCRIPTION'].str.len() > 1].copy()
-    display_log = display_log[display_log['MATERIAL DISCRIPTION'] != 'nan']
+    # 1. Clean Garbage Rows
+    # Remove rows where all columns are empty or description is nan
+    display_log = log_df.copy()
+    display_log = display_log[display_log['MATERIAL DISCRIPTION'].notna()]
+    display_log = display_log[display_log['MATERIAL DISCRIPTION'].str.len() > 1]
     
-    # Rename & Select
-    target_cols = ['DATE', 'MATERIAL DISCRIPTION', 'SIZE', 'MAKE', 'QTY_OUT', 'RECEIVER', 'REMARKS']
-    final_cols = [c for c in target_cols if c in display_log.columns]
-    
-    final_view = display_log[final_cols].rename(columns={
-        'MATERIAL DISCRIPTION': 'Item Name',
-        'QTY_OUT': 'Qty',
-        'RECEIVER': 'Issued To',
-        'SIZE': 'Size',
-        'MAKE': 'Make',
-        'REMARKS': 'Remarks',
-        'DATE': 'Date'
+    # 2. Clean Garbage Values (Replace "nan" text with actual empty space for cleaner look)
+    display_log = display_log.replace('nan', '')
+
+    # 3. Rename core columns for display (keep others as is)
+    display_log = display_log.rename(columns={
+        'MATERIAL DISCRIPTION': 'MATERIAL NAME',
+        'QTY_OUT': 'QTY'
     })
 
-    search_term = st.text_input("Search Logs", placeholder="Name, Item, or Date...")
+    # Search Logic
+    search_term = st.text_input("Search Logs", placeholder="Type Name, Item, or Date...")
     if search_term:
-        final_view = final_view[final_view.apply(lambda row: search_term.upper() in row.astype(str).str.upper().to_string(), axis=1)]
+        display_log = display_log[display_log.apply(lambda row: search_term.upper() in row.astype(str).str.upper().to_string(), axis=1)]
     
-    # --- THE LAYOUT FIX ---
-    # We use column_config to constrain widths and force proper formatting
+    # 4. DISPLAY WITH "PERFECT FIT" CONFIG
+    # This configuration forces all columns to behave politely.
     st.dataframe(
-        final_view,
+        display_log,
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Item Name": st.column_config.TextColumn("Item Name", width="medium"),
-            "Remarks": st.column_config.TextColumn("Remarks", width="small"),
-            "Issued To": st.column_config.TextColumn("Issued To", width="small"),
-            "Date": st.column_config.TextColumn("Date", width="small"),
-            "Qty": st.column_config.NumberColumn("Qty", format="%d")
+            # Force Description to be Medium width (truncates nicely instead of wrapping)
+            "MATERIAL NAME": st.column_config.TextColumn("Material Name", width="medium"),
+            
+            # Force Qty to be small number
+            "QTY": st.column_config.NumberColumn("Qty", format="%d", width="small"),
+            
+            # Force Date to be small text
+            "DATE": st.column_config.TextColumn("Date", width="small"),
+            
+            # Catch-all for other columns to prevent them from exploding
+            "REMARKS": st.column_config.TextColumn("Remarks", width="medium"),
+            "ISSUED TO": st.column_config.TextColumn("Issued To", width="medium")
         }
     )
 
