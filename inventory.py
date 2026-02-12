@@ -12,7 +12,6 @@ SHEET_ID = "1E0ZluX3o7vqnSBAdAMEn_cdxq3ro4F4DXxchOEFcS_g"
 INV_GID = "804871972" 
 LOG_GID = "1151083374" 
 
-# Define India Timezone
 IST = pytz.timezone('Asia/Kolkata')
 
 INV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={INV_GID}"
@@ -28,19 +27,17 @@ class EmailTracker:
 
 tracker = EmailTracker()
 
-# --- 3. HTML EMAIL ENGINE (Clean & Professional) ---
+# --- 3. HTML EMAIL ENGINE ---
 def send_daily_summary_email(items_list):
     try:
         if "email" not in st.secrets: return False
         creds = st.secrets["email"]
-        
         today_str = datetime.now(IST).strftime("%d-%b-%Y")
         
         msg = MIMEMultipart("alternative")
         msg['Subject'] = f"🛡️ Daily Stock Alert ({today_str}): {len(items_list)} Items Critical"
         msg['From'], msg['To'] = creds["address"], creds["receiver"]
 
-        # HTML Table for Email
         html_content = f"""
         <html>
         <head>
@@ -55,36 +52,20 @@ def send_daily_summary_email(items_list):
             <h2 style="color: #d9534f;">🚨 Critical Stock Report ({today_str})</h2>
             <p>The following items are low on stock:</p>
             <table>
-                <tr>
-                    <th>Material Description</th>
-                    <th>Stock</th>
-                    <th>Location</th>
-                </tr>
+                <tr><th>Material Description</th><th>Stock</th><th>Location</th></tr>
         """
         
         count = 0
         for item in items_list:
-            if str(item['name']).lower() == 'nan' or not str(item['name']).strip(): continue
-            html_content += f"""
-                <tr>
-                    <td>{item['name']}</td>
-                    <td style="font-weight: bold; color: #d9534f;">{item['qty']}</td>
-                    <td>{item['loc']}</td>
-                </tr>
-            """
+            if str(item['name']).lower() in ['nan', '']: continue
+            html_content += f"<tr><td>{item['name']}</td><td style='font-weight: bold; color: #d9534f;'>{item['qty']}</td><td>{item['loc']}</td></tr>"
             count += 1
             
-        html_content += """
-            </table>
-            <p style="font-size: 12px; color: #777;">Automated EMD Dashboard Alert</p>
-        </body>
-        </html>
-        """
+        html_content += "</table></body></html>"
         
         if count == 0: return False
 
         msg.attach(MIMEText(html_content, "html"))
-
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
@@ -95,11 +76,11 @@ def send_daily_summary_email(items_list):
         return True
     except: return False
 
-# --- 4. ROBUST DATA LOADING ---
+# --- 4. DATA LOADING ---
 @st.cache_data(ttl=60)
 def load_data():
     try:
-        # Load Inventory
+        # Inventory
         inv_raw = pd.read_csv(INV_URL, header=None).fillna("").astype(str)
         h_idx = next((i for i, r in inv_raw.iterrows() if "MATERIAL" in " ".join(r).upper()), None)
         if h_idx is None: return "Header Missing", None
@@ -107,18 +88,10 @@ def load_data():
         inv = pd.read_csv(INV_URL, skiprows=h_idx)
         inv.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in inv.columns]
         
-        # Load Logs
+        # Logs
         log = pd.read_csv(LOG_URL)
         log.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in log.columns]
-        
-        # Normalize Column Names
-        log = log.rename(columns={
-            'QUANTITY ISSUED': 'QTY_OUT', 
-            'ISSUED QUANTITY': 'QTY_OUT', 
-            'QTY': 'QTY_OUT',
-            'ISSUED TO': 'RECEIVER',
-            'NAME': 'RECEIVER'
-        })
+        log = log.rename(columns={'QUANTITY ISSUED': 'QTY_OUT', 'ISSUED QUANTITY': 'QTY_OUT', 'QTY': 'QTY_OUT'})
 
         # Type Safety
         merge_keys = ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION']
@@ -152,7 +125,6 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-# Remove 'nan' rows from Critical List
 crit = inv_df[(inv_df['LIVE STOCK'] <= 2) & (inv_df['MATERIAL DISCRIPTION'] != 'nan') & (inv_df['MATERIAL DISCRIPTION'] != '')]
 
 c1, c2, c3 = st.columns(3)
@@ -189,50 +161,51 @@ with tab2:
     else:
         st.success("✅ All Stock Levels are Healthy.")
 
-# TAB 3: USAGE LOGS (CLEANED)
+# TAB 3: USAGE LOGS (FIXED LAYOUT)
 with tab3:
     st.markdown("### 🔍 Material Drawal History")
     
-    # 1. CLEANING THE DATA FOR DISPLAY
-    # Filter out rows where Description is empty or 'nan'
+    # Clean Data
     display_log = log_df[log_df['MATERIAL DISCRIPTION'].str.len() > 1].copy()
     display_log = display_log[display_log['MATERIAL DISCRIPTION'] != 'nan']
     
-    # 2. SELECT RELEVANT COLUMNS
-    # We look for specific columns to show, ignoring technical ones
+    # Rename & Select
     target_cols = ['DATE', 'MATERIAL DISCRIPTION', 'SIZE', 'MAKE', 'QTY_OUT', 'RECEIVER', 'REMARKS']
     final_cols = [c for c in target_cols if c in display_log.columns]
     
-    # 3. RENAME FOR PROFESSIONAL LOOK
-    rename_map = {
+    final_view = display_log[final_cols].rename(columns={
         'MATERIAL DISCRIPTION': 'Item Name',
-        'QTY_OUT': 'Qty Issued',
+        'QTY_OUT': 'Qty',
         'RECEIVER': 'Issued To',
         'SIZE': 'Size',
         'MAKE': 'Make',
         'REMARKS': 'Remarks',
         'DATE': 'Date'
-    }
-    
-    final_view = display_log[final_cols].rename(columns=rename_map)
+    })
 
-    # Search Bar
     search_term = st.text_input("Search Logs", placeholder="Name, Item, or Date...")
     if search_term:
         final_view = final_view[final_view.apply(lambda row: search_term.upper() in row.astype(str).str.upper().to_string(), axis=1)]
     
-    # Display Clean Table
-    st.dataframe(final_view, use_container_width=True, hide_index=True)
+    # --- THE LAYOUT FIX ---
+    # We use column_config to constrain widths and force proper formatting
+    st.dataframe(
+        final_view,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Item Name": st.column_config.TextColumn("Item Name", width="medium"),
+            "Remarks": st.column_config.TextColumn("Remarks", width="small"),
+            "Issued To": st.column_config.TextColumn("Issued To", width="small"),
+            "Date": st.column_config.TextColumn("Date", width="small"),
+            "Qty": st.column_config.NumberColumn("Qty", format="%d")
+        }
+    )
 
-
-# --- 6. AUTOMATED EMAIL LOGIC ---
+# --- 6. EMAIL LOGIC ---
 today_str = datetime.now(IST).strftime("%Y-%m-%d")
 current_hour = datetime.now(IST).hour
-email_already_sent_today = (tracker.last_sent_date == today_str)
-is_time = (current_hour >= 9)
-items_exist = not crit.empty
-
-if is_time and items_exist and not email_already_sent_today:
+if (current_hour >= 9) and (tracker.last_sent_date != today_str) and not crit.empty:
     clist = []
     for _, r in crit.iterrows():
         if str(r['MATERIAL DISCRIPTION']).lower() not in ['nan', '']:
