@@ -19,11 +19,7 @@ LOG_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&
 
 st.set_page_config(page_title="EMD Material Dashboard", layout="wide", page_icon="🛡️")
 
-# --- 2. CSS FOR PERFECT WRAPPING ---
-# This CSS forces the table to behave exactly as you requested:
-# - All text wraps (white-space: normal)
-# - Rows grow in height to fit content
-# - Font is compact to fit 10 columns on one screen
+# --- 2. CSS FOR PERFECT WRAPPING (Tab 3) ---
 st.markdown("""
 <style>
     .reportview-container .main .block-container {
@@ -45,11 +41,11 @@ st.markdown("""
         text-align: left;
     }
     .styled-table th, .styled-table td {
-        padding: 8px 10px;
+        padding: 12px 15px;
         border: 1px solid #dddddd;
         white-space: normal !important; /* Forces text wrapping */
-        word-wrap: break-word;          /* Breaks long words if needed */
-        vertical-align: top;            /* Aligns text to top of cell */
+        word-wrap: break-word;          /* Breaks long words */
+        vertical-align: top;            /* Aligns text to top */
     }
     .styled-table tbody tr {
         border-bottom: 1px solid #dddddd;
@@ -101,20 +97,18 @@ def send_daily_summary_email(items_list):
 @st.cache_data(ttl=60)
 def load_data():
     try:
-        # Load Raw Inventory (For Backend Calc)
+        # Load Inventory
         inv_raw = pd.read_csv(INV_URL, header=None).fillna("").astype(str)
         h_idx = next((i for i, r in inv_raw.iterrows() if "MATERIAL" in " ".join(r).upper()), None)
         inv = pd.read_csv(INV_URL, skiprows=h_idx)
         inv.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in inv.columns]
         
-        # Load Raw Logs (For Display & Backend)
+        # Load Logs
         log = pd.read_csv(LOG_URL)
         log.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in log.columns]
-        
-        # Fix Column Name for Backend Calculation
         log_calc = log.rename(columns={'QUANTITY ISSUED': 'QTY_OUT', 'ISSUED QUANTITY': 'QTY_OUT', 'QTY': 'QTY_OUT'})
         
-        # Backend Merge Logic
+        # Merge Logic
         merge_keys = ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION']
         valid_keys = [k for k in merge_keys if k in inv.columns and k in log_calc.columns]
         
@@ -129,7 +123,7 @@ def load_data():
         merged = pd.merge(inv, cons, on=valid_keys, how='left').fillna(0)
         merged['LIVE STOCK'] = merged['TOTAL NO'] - merged['QTY_OUT']
         
-        return True, merged, log # Return raw log for display
+        return True, merged, log
     except Exception as e: return False, str(e), None
 
 # --- 6. UI RENDER ---
@@ -137,46 +131,67 @@ status, inv_df, log_raw = load_data()
 if not status: st.error(inv_df); st.stop()
 
 st.markdown("<h2 style='text-align: center; color: #1e3c72;'>🛡️ EMD Material Dashboard</h2>", unsafe_allow_html=True)
-crit = inv_df[(inv_df['LIVE STOCK'] <= 2) & (inv_df['MATERIAL DISCRIPTION'] != 'nan') & (inv_df['MATERIAL DISCRIPTION'] != '')]
 
-tab1, tab2, tab3 = st.tabs(["📦 Inventory", "🚨 Critical Stock", "📋 Usage Log (Full View)"])
+# --- SIDEBAR FILTER (RESTORED) ---
+st.sidebar.header("⚙️ Settings")
+loc_list = sorted(inv_df['LOCATION'].replace('nan', 'Unassigned').astype(str).unique().tolist())
+sel_loc = st.sidebar.selectbox("Filter Location", ["All"] + loc_list)
 
+# Apply Filter to Inventory Data
+filtered_inv = inv_df.copy()
+if sel_loc != "All":
+    filtered_inv = filtered_inv[filtered_inv['LOCATION'].astype(str) == sel_loc]
+
+# Critical Items (Filtered)
+crit = filtered_inv[(filtered_inv['LIVE STOCK'] <= 2) & (filtered_inv['MATERIAL DISCRIPTION'] != 'nan') & (filtered_inv['MATERIAL DISCRIPTION'] != '')]
+
+# Metrics
+c1, c2, c3 = st.columns(3)
+c1.metric("Catalog Items", len(filtered_inv))
+c2.metric("Total Stock", int(filtered_inv['LIVE STOCK'].sum()))
+c3.metric("Critical Alerts", len(crit), delta=f"{len(crit)} Low", delta_color="inverse")
+
+# --- TABS ---
+tab1, tab2, tab3 = st.tabs(["📦 Inventory Overview", "🚨 Critical Stock", "📋 Usage Log (Full View)"])
+
+# TAB 1: INVENTORY (Filtered)
 with tab1:
-    st.dataframe(inv_df, use_container_width=True, hide_index=True)
+    st.dataframe(filtered_inv, use_container_width=True, hide_index=True)
 
+# TAB 2: CRITICAL STOCK (Filtered)
 with tab2:
-    st.dataframe(crit, use_container_width=True, hide_index=True)
+    if not crit.empty:
+        st.dataframe(crit, use_container_width=True, hide_index=True)
+    else:
+        st.success("✅ No critical items in this location.")
 
-# --- TAB 3: THE WRAPPING FIX (USING HTML TABLE) ---
+# TAB 3: USAGE LOG (FULL HTML WRAPPING)
 with tab3:
     st.markdown("### 🔍 Full Material Drawal History")
     
-    # 1. Clean Data (Replace nan with empty string for cleaner look)
+    # Clean Data
     display_log = log_raw.fillna("").astype(str)
     
-    # 2. Filter out purely empty rows
+    # Filter empty rows
     if 'MATERIAL DISCRIPTION' in display_log.columns:
         display_log = display_log[display_log['MATERIAL DISCRIPTION'].str.len() > 1]
     
-    # 3. Search Bar
+    # Search Bar
     search = st.text_input("Search Logs...", placeholder="Type to filter rows...")
     if search:
         display_log = display_log[display_log.apply(lambda r: search.upper() in r.astype(str).str.upper().to_string(), axis=1)]
 
-    # 4. RENDER AS PURE HTML TABLE
-    # This ignores Streamlit's grid limitations and renders a browser-native table
-    # This guarantees that:
-    #   a) All 10 columns are shown
-    #   b) Text wraps inside the cell
-    #   c) Row height expands to fit the text
-    
+    # HTML Render
     html = display_log.to_html(classes='styled-table', index=False, escape=False)
     st.markdown(html, unsafe_allow_html=True)
 
 # --- 7. EMAIL LOGIC ---
 today = datetime.now(IST).strftime("%Y-%m-%d")
-if datetime.now(IST).hour >= 9 and tracker.last_sent_date != today and not crit.empty:
-    clist = [{'name': r['MATERIAL DISCRIPTION'], 'qty': r['LIVE STOCK'], 'loc': r['LOCATION']} for _, r in crit.iterrows()]
+# Note: Email sends GLOBAL critical list, not just filtered view
+global_crit = inv_df[(inv_df['LIVE STOCK'] <= 2) & (inv_df['MATERIAL DISCRIPTION'] != 'nan') & (inv_df['MATERIAL DISCRIPTION'] != '')]
+
+if datetime.now(IST).hour >= 9 and tracker.last_sent_date != today and not global_crit.empty:
+    clist = [{'name': r['MATERIAL DISCRIPTION'], 'qty': r['LIVE STOCK'], 'loc': r['LOCATION']} for _, r in global_crit.iterrows()]
     if send_daily_summary_email(clist):
         tracker.last_sent_date = today
         st.toast("✅ Daily Summary Sent")
