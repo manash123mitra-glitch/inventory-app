@@ -19,43 +19,22 @@ LOG_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&
 
 st.set_page_config(page_title="EMD Material Dashboard", layout="wide", page_icon="🛡️")
 
-# --- 2. CSS FOR PERFECT WRAPPING (Tab 3) ---
+# --- 2. CSS FOR DASHBOARD DISPLAY ---
 st.markdown("""
 <style>
-    .reportview-container .main .block-container {
-        max-width: 95%;
-        padding-top: 2rem;
-    }
-    /* Custom Table Styling */
+    .reportview-container .main .block-container { max-width: 95%; padding-top: 2rem; }
     .styled-table {
-        border-collapse: collapse;
-        margin: 25px 0;
-        font-size: 0.9em;
-        font-family: sans-serif;
-        min-width: 100%;
-        box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
+        border-collapse: collapse; margin: 25px 0; font-size: 0.9em;
+        font-family: sans-serif; min-width: 100%; box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
     }
-    .styled-table thead tr {
-        background-color: #009879;
-        color: #ffffff;
-        text-align: left;
-    }
+    .styled-table thead tr { background-color: #009879; color: #ffffff; text-align: left; }
     .styled-table th, .styled-table td {
-        padding: 12px 15px;
-        border: 1px solid #dddddd;
-        white-space: normal !important; /* Forces text wrapping */
-        word-wrap: break-word;          /* Breaks long words */
-        vertical-align: top;            /* Aligns text to top */
+        padding: 12px 15px; border: 1px solid #dddddd;
+        white-space: normal !important; word-wrap: break-word; vertical-align: top;
     }
-    .styled-table tbody tr {
-        border-bottom: 1px solid #dddddd;
-    }
-    .styled-table tbody tr:nth-of-type(even) {
-        background-color: #f3f3f3;
-    }
-    .styled-table tbody tr:last-of-type {
-        border-bottom: 2px solid #009879;
-    }
+    .styled-table tbody tr { border-bottom: 1px solid #dddddd; }
+    .styled-table tbody tr:nth-of-type(even) { background-color: #f3f3f3; }
+    .styled-table tbody tr:last-of-type { border-bottom: 2px solid #009879; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -67,20 +46,39 @@ class EmailTracker:
 
 tracker = EmailTracker()
 
-# --- 4. EMAIL ENGINE ---
-def send_daily_summary_email(items_list):
+# --- 4. EMAIL ENGINE (MATCHES DASHBOARD FORMAT) ---
+def send_daily_summary_email(dataframe):
     try:
         if "email" not in st.secrets: return False
         creds = st.secrets["email"]
         today_str = datetime.now(IST).strftime("%d-%b-%Y")
         msg = MIMEMultipart("alternative")
-        msg['Subject'] = f"🛡️ Daily Stock Alert ({today_str}): {len(items_list)} Items Critical"
+        msg['Subject'] = f"🛡️ Daily Stock Alert ({today_str}): {len(dataframe)} Items Critical"
         msg['From'], msg['To'] = creds["address"], creds["receiver"]
 
-        html_content = f"<html><body><h2 style='color: #d9534f;'>🚨 Critical Stock Report</h2><table border='1' style='border-collapse: collapse; width: 100%;'><tr><th>Material</th><th>Stock</th><th>Location</th></tr>"
-        for item in items_list:
-            html_content += f"<tr><td>{item['name']}</td><td>{item['qty']}</td><td>{item['loc']}</td></tr>"
-        html_content += "</table></body></html>"
+        # Convert DataFrame to HTML with styling
+        # We rename columns for cleaner email display if needed, but keeping them raw per your request
+        html_table = dataframe.to_html(index=False, border=1, justify="left")
+
+        html_content = f"""
+        <html>
+        <head>
+            <style>
+                table {{ border-collapse: collapse; width: 100%; font-family: Arial, sans-serif; font-size: 12px; }}
+                th {{ background-color: #d9534f; color: white; padding: 10px; text-align: left; }}
+                td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                tr:nth-child(even) {{ background-color: #f2f2f2; }}
+            </style>
+        </head>
+        <body>
+            <h2 style="color: #d9534f;">🚨 Critical Stock Report ({today_str})</h2>
+            <p>The following items are at or below re-order level:</p>
+            {html_table}
+            <br>
+            <p style="font-size: 11px; color: #555;">Automated EMD Dashboard Report</p>
+        </body>
+        </html>
+        """
         
         msg.attach(MIMEText(html_content, "html"))
         context = ssl.create_default_context()
@@ -132,17 +130,22 @@ if not status: st.error(inv_df); st.stop()
 
 st.markdown("<h2 style='text-align: center; color: #1e3c72;'>🛡️ EMD Material Dashboard</h2>", unsafe_allow_html=True)
 
-# --- SIDEBAR FILTER (RESTORED) ---
+# SIDEBAR FILTER
 st.sidebar.header("⚙️ Settings")
 loc_list = sorted(inv_df['LOCATION'].replace('nan', 'Unassigned').astype(str).unique().tolist())
 sel_loc = st.sidebar.selectbox("Filter Location", ["All"] + loc_list)
 
-# Apply Filter to Inventory Data
+# Apply Filter
 filtered_inv = inv_df.copy()
 if sel_loc != "All":
     filtered_inv = filtered_inv[filtered_inv['LOCATION'].astype(str) == sel_loc]
 
-# Critical Items (Filtered)
+# Define Columns to Show (The Exact Template)
+display_cols = ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'LIVE STOCK']
+# Filter columns that actually exist
+final_cols = [c for c in display_cols if c in inv_df.columns]
+
+# Critical Items
 crit = filtered_inv[(filtered_inv['LIVE STOCK'] <= 2) & (filtered_inv['MATERIAL DISCRIPTION'] != 'nan') & (filtered_inv['MATERIAL DISCRIPTION'] != '')]
 
 # Metrics
@@ -154,44 +157,40 @@ c3.metric("Critical Alerts", len(crit), delta=f"{len(crit)} Low", delta_color="i
 # --- TABS ---
 tab1, tab2, tab3 = st.tabs(["📦 Inventory Overview", "🚨 Critical Stock", "📋 Usage Log (Full View)"])
 
-# TAB 1: INVENTORY (Filtered)
 with tab1:
-    st.dataframe(filtered_inv, use_container_width=True, hide_index=True)
+    st.dataframe(filtered_inv[final_cols], use_container_width=True, hide_index=True)
 
-# TAB 2: CRITICAL STOCK (Filtered)
 with tab2:
     if not crit.empty:
-        st.dataframe(crit, use_container_width=True, hide_index=True)
+        st.dataframe(crit[final_cols], use_container_width=True, hide_index=True)
     else:
         st.success("✅ No critical items in this location.")
 
-# TAB 3: USAGE LOG (FULL HTML WRAPPING)
 with tab3:
     st.markdown("### 🔍 Full Material Drawal History")
-    
-    # Clean Data
     display_log = log_raw.fillna("").astype(str)
-    
-    # Filter empty rows
     if 'MATERIAL DISCRIPTION' in display_log.columns:
         display_log = display_log[display_log['MATERIAL DISCRIPTION'].str.len() > 1]
     
-    # Search Bar
     search = st.text_input("Search Logs...", placeholder="Type to filter rows...")
     if search:
         display_log = display_log[display_log.apply(lambda r: search.upper() in r.astype(str).str.upper().to_string(), axis=1)]
 
-    # HTML Render
+    # HTML Render for Text Wrapping
     html = display_log.to_html(classes='styled-table', index=False, escape=False)
     st.markdown(html, unsafe_allow_html=True)
 
-# --- 7. EMAIL LOGIC ---
+# --- 7. EMAIL LOGIC (SENDS EXACT TABLE) ---
 today = datetime.now(IST).strftime("%Y-%m-%d")
-# Note: Email sends GLOBAL critical list, not just filtered view
+
+# Note: We send the GLOBAL critical list (all locations) unless you want filtered
+# Current Logic: Sends GLOBAL list to ensure nothing is missed.
 global_crit = inv_df[(inv_df['LIVE STOCK'] <= 2) & (inv_df['MATERIAL DISCRIPTION'] != 'nan') & (inv_df['MATERIAL DISCRIPTION'] != '')]
 
 if datetime.now(IST).hour >= 9 and tracker.last_sent_date != today and not global_crit.empty:
-    clist = [{'name': r['MATERIAL DISCRIPTION'], 'qty': r['LIVE STOCK'], 'loc': r['LOCATION']} for _, r in global_crit.iterrows()]
-    if send_daily_summary_email(clist):
+    # We pass the DataFrame with the exact columns you see in the dashboard
+    email_df = global_crit[final_cols]
+    
+    if send_daily_summary_email(email_df):
         tracker.last_sent_date = today
         st.toast("✅ Daily Summary Sent")
