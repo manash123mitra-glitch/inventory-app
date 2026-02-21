@@ -62,7 +62,7 @@ st.markdown("""
         border-left: 4px solid #2c5364;
     }
 
-    /* HACK: Tighter padding for st.dataframe cells to make rows compact */
+    /* Tighter padding for st.dataframe cells to make rows compact */
     [data-testid="stDataFrame"] td, [data-testid="stDataFrame"] th {
         padding: 4px 8px !important;
         font-size: 0.9rem !important;
@@ -128,7 +128,6 @@ def load_data():
         h_idx = next((i for i, r in inv_raw.iterrows() if "MATERIAL" in " ".join(r).upper() and "DESCRIPTION" in " ".join(r).upper()), None)
         
         if h_idx is None:
-             # Fallback if header not found easily
              inv = pd.read_csv(INV_URL)
         else:
              inv = pd.read_csv(INV_URL, skiprows=h_idx)
@@ -136,13 +135,11 @@ def load_data():
         inv.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in inv.columns]
         
         # --- CRITICAL DATA CLEANING STEP ---
-        # 1. Remove rows where Material Description is 'nan' string or actual NaN
-        inv = inv[inv['MATERIAL DISCRIPTION'].astype(str) != 'nan']
-        inv = inv[inv['MATERIAL DISCRIPTION'].notna()]
-        # 2. Remove rows that are repeated headers sitting in the data
-        inv = inv[inv['MATERIAL DISCRIPTION'].str.upper() != 'MATERIAL DISCRIPTION']
-        # 3. Remove rows with empty descriptions
-        inv = inv[inv['MATERIAL DISCRIPTION'].str.strip() != '']
+        if 'MATERIAL DISCRIPTION' in inv.columns:
+            inv = inv[inv['MATERIAL DISCRIPTION'].astype(str) != 'nan']
+            inv = inv[inv['MATERIAL DISCRIPTION'].notna()]
+            inv = inv[inv['MATERIAL DISCRIPTION'].str.upper() != 'MATERIAL DISCRIPTION']
+            inv = inv[inv['MATERIAL DISCRIPTION'].str.strip() != '']
 
         # Load Logs
         log = pd.read_csv(LOG_URL)
@@ -196,8 +193,7 @@ def style_critical_rows(df):
     return df.style.apply(lambda x: ['background-color: #fff0f0; color: #c0392b; font-weight: 600' if x['LIVE STOCK'] <= 2 else '' for i in x], axis=1)
 
 # --- COLUMN CONFIG FOR COMPACT ROWS ---
-# This forces single lines and truncates long text
- compact_config = {
+compact_config = {
     "MAKE": st.column_config.TextColumn("Make", width="small"),
     "MATERIAL DISCRIPTION": st.column_config.TextColumn("Material Description", width="large"),
     "TYPE(RATING)": st.column_config.TextColumn("Type/Rating", width="medium"),
@@ -210,12 +206,11 @@ def style_critical_rows(df):
 tab1, tab2, tab3 = st.tabs(["📦 Master Inventory", "🚨 Action Required", "📋 Drawal History"])
 
 with tab1:
-    # Apply style AND compact config
     st.dataframe(
         style_critical_rows(filtered_inv[final_cols]),
         use_container_width=True,
         hide_index=True,
-        height=700, # Fixed height for a cleaner look
+        height=700, 
         column_config=compact_config
     )
 
@@ -243,19 +238,18 @@ with tab3:
     if search:
         dlog = dlog[dlog.apply(lambda r: search.upper() in r.astype(str).str.upper().to_string(), axis=1)]
 
-    # Use dataframe with config for compact log view too
+    # Dynamic column config for logs
+    log_config = {c: st.column_config.TextColumn(c.title(), width="medium") for c in dlog.columns}
+    
     st.dataframe(
         dlog,
         use_container_width=True,
         hide_index=True,
-        column_config={
-             c: st.column_config.TextColumn(c.title(), width="medium") for c in dlog.columns
-        }
+        column_config=log_config
     )
 
 # --- 7. EMAIL LOGIC ---
 today = datetime.now(IST).strftime("%Y-%m-%d")
-# Recalculate global critical list based on cleaned data
 global_crit = inv_df[inv_df['LIVE STOCK'] <= 2]
 
 if datetime.now(IST).hour >= 9 and tracker.last_sent_date != today and not global_crit.empty:
