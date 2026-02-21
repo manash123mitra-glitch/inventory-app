@@ -57,7 +57,6 @@ def send_daily_summary_email(dataframe):
         msg['From'], msg['To'] = creds["address"], creds["receiver"]
 
         # Convert DataFrame to HTML with styling
-        # We rename columns for cleaner email display if needed, but keeping them raw per your request
         html_table = dataframe.to_html(index=False, border=1, justify="left")
 
         html_content = f"""
@@ -91,7 +90,7 @@ def send_daily_summary_email(dataframe):
         return True
     except: return False
 
-# --- 5. DATA LOADING ---
+# --- 5. DATA LOADING (UPDATED FOR MANUAL STOCK) ---
 @st.cache_data(ttl=60)
 def load_data():
     try:
@@ -104,24 +103,20 @@ def load_data():
         # Load Logs
         log = pd.read_csv(LOG_URL)
         log.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in log.columns]
-        log_calc = log.rename(columns={'QUANTITY ISSUED': 'QTY_OUT', 'ISSUED QUANTITY': 'QTY_OUT', 'QTY': 'QTY_OUT'})
         
-        # Merge Logic
-        merge_keys = ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION']
-        valid_keys = [k for k in merge_keys if k in inv.columns and k in log_calc.columns]
+        # Format the TOTAL NO column as integer
+        if 'TOTAL NO' in inv.columns: 
+            inv['TOTAL NO'] = pd.to_numeric(inv['TOTAL NO'], errors='coerce').fillna(0).astype(int)
         
-        for k in valid_keys:
-            inv[k] = inv[k].astype(str).str.strip()
-            log_calc[k] = log_calc[k].astype(str).str.strip()
-
-        if 'TOTAL NO' in inv.columns: inv['TOTAL NO'] = pd.to_numeric(inv['TOTAL NO'], errors='coerce').fillna(0).astype(int)
-        if 'QTY_OUT' in log_calc.columns: log_calc['QTY_OUT'] = pd.to_numeric(log_calc['QTY_OUT'], errors='coerce').fillna(0).astype(int)
-
-        cons = log_calc.groupby(valid_keys)['QTY_OUT'].sum().reset_index()
-        merged = pd.merge(inv, cons, on=valid_keys, how='left').fillna(0)
-        merged['LIVE STOCK'] = merged['TOTAL NO'] - merged['QTY_OUT']
-        
-        return True, merged, log
+        # --- THE FIX ---
+        # Instead of subtracting usage, we just set LIVE STOCK to equal TOTAL NO.
+        # This keeps the rest of the dashboard running perfectly.
+        if 'TOTAL NO' in inv.columns:
+            inv['LIVE STOCK'] = inv['TOTAL NO']
+        else:
+            inv['LIVE STOCK'] = 0
+            
+        return True, inv, log
     except Exception as e: return False, str(e), None
 
 # --- 6. UI RENDER ---
@@ -183,12 +178,11 @@ with tab3:
 # --- 7. EMAIL LOGIC (SENDS EXACT TABLE) ---
 today = datetime.now(IST).strftime("%Y-%m-%d")
 
-# Note: We send the GLOBAL critical list (all locations) unless you want filtered
-# Current Logic: Sends GLOBAL list to ensure nothing is missed.
+# Sends GLOBAL list to ensure nothing is missed.
 global_crit = inv_df[(inv_df['LIVE STOCK'] <= 2) & (inv_df['MATERIAL DISCRIPTION'] != 'nan') & (inv_df['MATERIAL DISCRIPTION'] != '')]
 
 if datetime.now(IST).hour >= 9 and tracker.last_sent_date != today and not global_crit.empty:
-    # We pass the DataFrame with the exact columns you see in the dashboard
+    # Pass the DataFrame with the exact columns you see in the dashboard
     email_df = global_crit[final_cols]
     
     if send_daily_summary_email(email_df):
