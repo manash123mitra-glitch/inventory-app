@@ -22,21 +22,16 @@ st.set_page_config(page_title="EMD Material Dashboard", layout="wide", page_icon
 # --- 2. COMPACT & PREMIUM CSS ---
 st.markdown("""
 <style>
-    /* Import Inter Font */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
     html, body, [class*="css"] {
         font-family: 'Inter', sans-serif !important;
     }
-
-    /* Maximize screen usage */
     .reportview-container .main .block-container { 
         max-width: 98%; 
         padding-top: 1rem; 
         padding-right: 1rem;
         padding-left: 1rem;
     }
-
-    /* Header Styling */
     .header-box {
         background: linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
         padding: 15px; 
@@ -46,26 +41,14 @@ st.markdown("""
         margin-bottom: 20px; 
         box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
-    .header-box h1 {
-        margin: 0;
-        font-size: 1.8rem;
-        font-weight: 600;
-    }
-
-    /* Metric Card Styling */
+    .header-box h1 { margin: 0; font-size: 1.8rem; font-weight: 600; }
     div[data-testid="metric-container"] {
-        background-color: #fff;
-        border: 1px solid #e0e0e0;
-        padding: 10px 15px;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        border-left: 4px solid #2c5364;
+        background-color: #fff; border: 1px solid #e0e0e0;
+        padding: 10px 15px; border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05); border-left: 4px solid #2c5364;
     }
-
-    /* Tighter padding for st.dataframe cells to make rows compact */
     [data-testid="stDataFrame"] td, [data-testid="stDataFrame"] th {
-        padding: 4px 8px !important;
-        font-size: 0.9rem !important;
+        padding: 6px 10px !important; font-size: 0.9rem !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -122,9 +105,7 @@ def send_daily_summary_email(dataframe):
 @st.cache_data(ttl=60)
 def load_data():
     try:
-        # Load Inventory
         inv_raw = pd.read_csv(INV_URL, header=None).fillna("").astype(str)
-        # Find header row dynamically
         h_idx = next((i for i, r in inv_raw.iterrows() if "MATERIAL" in " ".join(r).upper() and "DESCRIPTION" in " ".join(r).upper()), None)
         
         if h_idx is None:
@@ -134,22 +115,18 @@ def load_data():
 
         inv.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in inv.columns]
         
-        # --- CRITICAL DATA CLEANING STEP ---
         if 'MATERIAL DISCRIPTION' in inv.columns:
             inv = inv[inv['MATERIAL DISCRIPTION'].astype(str) != 'nan']
             inv = inv[inv['MATERIAL DISCRIPTION'].notna()]
             inv = inv[inv['MATERIAL DISCRIPTION'].str.upper() != 'MATERIAL DISCRIPTION']
             inv = inv[inv['MATERIAL DISCRIPTION'].str.strip() != '']
 
-        # Load Logs
         log = pd.read_csv(LOG_URL)
         log.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in log.columns]
         
-        # Ensure TOTAL NO is int
         if 'TOTAL NO' in inv.columns: 
             inv['TOTAL NO'] = pd.to_numeric(inv['TOTAL NO'], errors='coerce').fillna(0).astype(int)
         
-        # Set LIVE STOCK
         if 'TOTAL NO' in inv.columns:
             inv['LIVE STOCK'] = inv['TOTAL NO']
         else:
@@ -162,56 +139,44 @@ def load_data():
 status, inv_df, log_raw = load_data()
 if not status: st.error(inv_df); st.stop()
 
-# Header
 st.markdown("<div class='header-box'><h1>🛡️ EMD Material Dashboard</h1></div>", unsafe_allow_html=True)
 
-# Sidebar
 st.sidebar.header("⚙️ Controls")
 loc_list = sorted(inv_df['LOCATION'].replace('nan', 'Unassigned').astype(str).unique().tolist())
 sel_loc = st.sidebar.selectbox("📍 Filter Zone", ["All Locations"] + loc_list)
 
-# Filter Logic
 filtered_inv = inv_df.copy()
 if sel_loc != "All Locations":
     filtered_inv = filtered_inv[filtered_inv['LOCATION'].astype(str) == sel_loc]
 
-# Columns to display
 display_cols = ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'LIVE STOCK']
 final_cols = [c for c in display_cols if c in inv_df.columns]
 
-# Calculate Critical
 crit = filtered_inv[filtered_inv['LIVE STOCK'] <= 2]
 
-# Metrics
 c1, c2, c3 = st.columns(3)
 c1.metric("Catalog Size", len(filtered_inv))
 c2.metric("Total Stock Units", int(filtered_inv['LIVE STOCK'].sum()))
 c3.metric("Critical Alerts", len(crit), delta=f"{len(crit)} Need Reorder", delta_color="inverse")
 
-# --- STYLE FUNCTION FOR RED ALERTS ---
 def style_critical_rows(df):
     return df.style.apply(lambda x: ['background-color: #fff0f0; color: #c0392b; font-weight: 600' if x['LIVE STOCK'] <= 2 else '' for i in x], axis=1)
 
-# --- COLUMN CONFIG FOR COMPACT ROWS ---
 compact_config = {
     "MAKE": st.column_config.TextColumn("Make", width="small"),
-    "MATERIAL DISCRIPTION": st.column_config.TextColumn("Material Description", width="large"),
+    "MATERIAL DISCRIPTION": st.column_config.TextColumn("Material Discription", width="large"),
     "TYPE(RATING)": st.column_config.TextColumn("Type/Rating", width="medium"),
     "SIZE": st.column_config.TextColumn("Size", width="small"),
     "LOCATION": st.column_config.TextColumn("Location", width="medium"),
     "LIVE STOCK": st.column_config.NumberColumn("Stock", format="%d", width="small"),
 }
 
-# --- TABS ---
 tab1, tab2, tab3 = st.tabs(["📦 Master Inventory", "🚨 Action Required", "📋 Drawal History"])
 
 with tab1:
     st.dataframe(
         style_critical_rows(filtered_inv[final_cols]),
-        use_container_width=True,
-        hide_index=True,
-        height=700, 
-        column_config=compact_config
+        use_container_width=True, hide_index=True, height=700, column_config=compact_config
     )
 
 with tab2:
@@ -219,33 +184,73 @@ with tab2:
         st.error(f"⚠️ **{len(crit)} items are below re-order level.**")
         st.dataframe(
             style_critical_rows(crit[final_cols]),
-            use_container_width=True,
-            hide_index=True,
-            column_config=compact_config
+            use_container_width=True, hide_index=True, column_config=compact_config
         )
     else:
         st.success("✅ No critical stock items found.")
 
+# --- TAB 3: PERFECTLY FORMATTED USAGE LOG ---
 with tab3:
     st.markdown("### 🔍 Drawal History")
-    # Clean Log Data
-    dlog = log_raw.fillna("").astype(str)
-    if 'MATERIAL DISCRIPTION' in dlog.columns:
-        dlog = dlog[dlog['MATERIAL DISCRIPTION'].str.len() > 1]
-        dlog = dlog[dlog['MATERIAL DISCRIPTION'] != 'nan']
     
+    # 1. Clean Log Data
+    dlog = log_raw.fillna("").astype(str)
+    
+    # 2. Rename Columns to match exactly the screenshot format
+    rename_dict = {
+        'DATE': 'Date',
+        'MAKE': 'Make',
+        'MATERIAL DISCRIPTION': 'Material Discription',
+        'TYPE(RATING)': 'Type(Rating)',
+        'SIZE': 'Size',
+        'LOCATION': 'Location',
+        'QUANTITY ISSUED': 'Quantity Issued',
+        'ISSUED QUANTITY': 'Quantity Issued',
+        'QTY': 'Quantity Issued',
+        'UNIT': 'Unit',
+        'ISSUED TO': 'Issued To',
+        'NAME': 'Issued To',
+        'PURPOSE': 'Purpose',
+        'REMARKS': 'Purpose'
+    }
+    dlog = dlog.rename(columns=rename_dict)
+    
+    # Ensure only the specific 10 columns are shown if they exist
+    target_10_cols = ['Date', 'Make', 'Material Discription', 'Type(Rating)', 'Size', 'Location', 'Quantity Issued', 'Unit', 'Issued To', 'Purpose']
+    dlog_cols = [c for c in target_10_cols if c in dlog.columns]
+    dlog = dlog[dlog_cols]
+
+    # Remove garbage rows
+    if 'Material Discription' in dlog.columns:
+        dlog = dlog[dlog['Material Discription'].str.len() > 1]
+        dlog = dlog[dlog['Material Discription'].str.lower() != 'nan']
+    
+    # 3. Search Filter
     search = st.text_input("Search Logs...", placeholder="Type to filter...")
     if search:
         dlog = dlog[dlog.apply(lambda r: search.upper() in r.astype(str).str.upper().to_string(), axis=1)]
 
-    # Dynamic column config for logs
-    log_config = {c: st.column_config.TextColumn(c.title(), width="medium") for c in dlog.columns}
+    # 4. EXPLICIT COLUMN CONFIGURATION TO PREVENT OVERFLOW
+    # By strictly defining sizes, Streamlit will not stretch rows out of proportion
+    log_config = {
+        "Date": st.column_config.TextColumn("Date", width="small"),
+        "Make": st.column_config.TextColumn("Make", width="small"),
+        "Material Discription": st.column_config.TextColumn("Material Discription", width="large"),
+        "Type(Rating)": st.column_config.TextColumn("Type(Rating)", width="medium"),
+        "Size": st.column_config.TextColumn("Size", width="small"),
+        "Location": st.column_config.TextColumn("Location", width="medium"),
+        "Quantity Issued": st.column_config.TextColumn("Quantity Issued", width="small"),
+        "Unit": st.column_config.TextColumn("Unit", width="small"),
+        "Issued To": st.column_config.TextColumn("Issued To", width="medium"),
+        "Purpose": st.column_config.TextColumn("Purpose", width="large")
+    }
     
     st.dataframe(
         dlog,
         use_container_width=True,
         hide_index=True,
-        column_config=log_config
+        column_config=log_config,
+        height=700
     )
 
 # --- 7. EMAIL LOGIC ---
