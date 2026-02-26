@@ -46,6 +46,37 @@ st.markdown("""
     [data-testid="stDataFrame"] td, [data-testid="stDataFrame"] th {
         padding: 8px 12px !important; font-size: 0.9rem !important;
     }
+
+    /* CSS For Text-Wrapping HTML Table in Tab 4 */
+    .wrap-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.85rem;
+        background-color: white;
+        border: 1px solid #e6e9ef;
+        margin-top: 15px;
+    }
+    .wrap-table th {
+        background-color: #f8f9fa;
+        color: #31333F;
+        padding: 10px;
+        border-bottom: 2px solid #e6e9ef;
+        border-right: 1px solid #e6e9ef;
+        text-align: left;
+        font-weight: 600;
+    }
+    .wrap-table td {
+        padding: 10px;
+        border-bottom: 1px solid #e6e9ef;
+        border-right: 1px solid #e6e9ef;
+        white-space: normal !important;  /* FORCES TEXT WRAPPING */
+        word-wrap: break-word;           /* PREVENTS OVERFLOW */
+        vertical-align: top;
+        color: #4a5568;
+    }
+    .wrap-table tr:hover {
+        background-color: #f1f5f9;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -254,21 +285,16 @@ with tab4:
         dlog = dlog[dlog['Material Discription'].str.len() > 1]
         dlog = dlog[dlog['Material Discription'].str.lower() != 'nan']
     
-    # --- NEW: SORT LIFO (LAST IN, FIRST OUT) ---
+    # Sort LIFO (LAST IN, FIRST OUT)
     if 'Date' in dlog.columns:
-        # Convert to datetime temporarily for accurate sorting
         dlog['Temp_Date'] = pd.to_datetime(dlog['Date'], format='mixed', dayfirst=True, errors='coerce')
         dlog = dlog.sort_values(by='Temp_Date', ascending=False)
-        
-        # Get unique dates for the dropdown filter (Formatted nicely)
         unique_dates = dlog['Temp_Date'].dropna().dt.strftime('%d-%b-%Y').unique().tolist()
-        
-        # Drop the temp column as we just needed it for sorting
         dlog = dlog.drop(columns=['Temp_Date'])
     else:
         unique_dates = []
 
-    # --- NEW: DATE DROPDOWN & SEARCH UI ---
+    # DATE DROPDOWN & SEARCH UI
     col1, col2 = st.columns([1, 2])
     with col1:
         if unique_dates:
@@ -281,7 +307,6 @@ with tab4:
 
     # Apply Date Filter
     if selected_date != "All Dates" and 'Date' in dlog.columns:
-        # Convert sheet dates temporarily to match the dropdown format for perfect filtering
         temp_filter_dates = pd.to_datetime(dlog['Date'], format='mixed', dayfirst=True, errors='coerce').dt.strftime('%d-%b-%Y')
         dlog = dlog[temp_filter_dates == selected_date]
 
@@ -289,20 +314,13 @@ with tab4:
     if search:
         dlog = dlog[dlog.apply(lambda r: search.upper() in r.astype(str).str.upper().to_string(), axis=1)]
 
-    log_config = {
-        "Date": st.column_config.TextColumn("Date", width="small"),
-        "Make": st.column_config.TextColumn("Make", width="small"),
-        "Material Discription": st.column_config.TextColumn("Material Discription", width="large"),
-        "Type(Rating)": st.column_config.TextColumn("Type(Rating)", width="medium"),
-        "Size": st.column_config.TextColumn("Size", width="small"),
-        "Location": st.column_config.TextColumn("Location", width="medium"),
-        "Quantity Issued": st.column_config.TextColumn("Quantity Issued", width="small"),
-        "Unit": st.column_config.TextColumn("Unit", width="small"),
-        "Issued To": st.column_config.TextColumn("Issued To", width="medium"),
-        "Purpose": st.column_config.TextColumn("Purpose", width="large")
-    }
-    
-    st.dataframe(dlog, use_container_width=True, hide_index=True, column_config=log_config, height=600)
+    # --- HTML RENDERER FOR FORCED WRAPPING ---
+    if dlog.empty:
+        st.info("No records found for the selected criteria.")
+    else:
+        # Convert to HTML, applying the .wrap-table CSS class defined at the top of the script
+        html_output = dlog.to_html(index=False, classes="wrap-table", escape=False)
+        st.markdown(html_output, unsafe_allow_html=True)
 
 # --- 7. AUTOMATED EMAIL LOGIC ---
 today = datetime.now(IST).strftime("%Y-%m-%d")
