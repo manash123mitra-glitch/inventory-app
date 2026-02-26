@@ -29,7 +29,6 @@ st.markdown("""
     .reportview-container .main .block-container { 
         max-width: 98%; padding-top: 1rem; 
     }
-    /* Sleek Modern Header */
     .header-box {
         background: linear-gradient(90deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
         padding: 20px 30px; 
@@ -44,7 +43,6 @@ st.markdown("""
     .header-box h1 { margin: 0; font-size: 2rem; font-weight: 700; letter-spacing: -0.5px; }
     .header-box p { margin: 0; opacity: 0.8; font-size: 0.9rem; }
     
-    /* Compact DataFrames */
     [data-testid="stDataFrame"] td, [data-testid="stDataFrame"] th {
         padding: 8px 12px !important; font-size: 0.9rem !important;
     }
@@ -96,23 +94,19 @@ def send_daily_summary_email(dataframe):
 @st.cache_data(ttl=60)
 def load_data():
     try:
-        # 1. Load Inventory
         inv_raw = pd.read_csv(INV_URL, header=None).fillna("").astype(str)
         h_idx = next((i for i, r in inv_raw.iterrows() if "MATERIAL" in " ".join(r).upper()), None)
         inv = pd.read_csv(INV_URL) if h_idx is None else pd.read_csv(INV_URL, skiprows=h_idx)
         inv.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in inv.columns]
         
-        # Clean Inventory
         if 'MATERIAL DISCRIPTION' in inv.columns:
             inv = inv[inv['MATERIAL DISCRIPTION'].astype(str).str.lower() != 'nan']
             inv = inv[inv['MATERIAL DISCRIPTION'].str.upper() != 'MATERIAL DISCRIPTION']
             inv = inv[inv['MATERIAL DISCRIPTION'].str.strip() != '']
 
-        # 2. Load Logs
         log = pd.read_csv(LOG_URL)
         log.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in log.columns]
         
-        # 3. Standardize Log Columns for Analytics
         rename_dict = {
             'DATE': 'Date', 'MATERIAL DISCRIPTION': 'Material Discription',
             'QUANTITY ISSUED': 'Qty', 'ISSUED QUANTITY': 'Qty', 'QTY': 'Qty'
@@ -123,14 +117,12 @@ def load_data():
         if 'Date' in log_clean.columns:
             log_clean['Date'] = pd.to_datetime(log_clean['Date'], format='mixed', dayfirst=True, errors='coerce')
 
-        # 4. Set Manual Live Stock
         if 'TOTAL NO' in inv.columns: 
             inv['TOTAL NO'] = pd.to_numeric(inv['TOTAL NO'], errors='coerce').fillna(0).astype(int)
             inv['LIVE STOCK'] = inv['TOTAL NO']
         else:
             inv['LIVE STOCK'] = 0
 
-        # --- PREDICTIVE ANALYTICS ENGINE ---
         if 'Date' in log_clean.columns and 'Material Discription' in log_clean.columns:
             thirty_days_ago = pd.Timestamp.now() - pd.Timedelta(days=30)
             recent_logs = log_clean[log_clean['Date'] >= thirty_days_ago]
@@ -160,7 +152,6 @@ def load_data():
 status, inv_df, log_raw = load_data()
 if not status: st.error(inv_df); st.stop()
 
-# Top Header
 st.markdown("""
 <div class='header-box'>
     <div>
@@ -174,7 +165,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Sidebar
 st.sidebar.header("⚙️ Global Controls")
 loc_list = sorted(inv_df['LOCATION'].replace('nan', 'Unassigned').astype(str).unique().tolist())
 sel_loc = st.sidebar.selectbox("📍 Filter Zone", ["All Locations"] + loc_list)
@@ -186,7 +176,6 @@ if sel_loc != "All Locations":
 display_cols = ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'LIVE STOCK']
 final_cols = [c for c in display_cols if c in inv_df.columns]
 
-# Advanced KPIs
 crit = filtered_inv[filtered_inv['LIVE STOCK'] <= 2]
 top_item = filtered_inv.sort_values(by='30-Day Usage', ascending=False).iloc[0] if '30-Day Usage' in filtered_inv.columns and not filtered_inv.empty else None
 
@@ -199,7 +188,6 @@ if top_item is not None and top_item['30-Day Usage'] > 0:
 else:
     kpi4.metric("🔥 High-Velocity Item", "Awaiting Data", "0 used/mo", delta_color="off")
 
-# Styles & Configs
 def style_critical_rows(df):
     return df.style.apply(lambda x: ['background-color: #fff0f0; color: #c0392b; font-weight: 600' if x['LIVE STOCK'] <= 2 else '' for i in x], axis=1)
 
@@ -231,30 +219,15 @@ with tab3:
     
     pred_cols = ['MATERIAL DISCRIPTION', 'LOCATION', 'LIVE STOCK', '30-Day Usage', 'Run Rate (Daily)', 'Predicted Days Left']
     if all(c in filtered_inv.columns for c in pred_cols):
-        
         forecast_df = filtered_inv[pred_cols].sort_values(by='30-Day Usage', ascending=False)
-        
         colA, colB = st.columns([2, 1])
-        
         with colA:
-            # --- EXPORT BUTTON ---
             csv_data = forecast_df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Download Forecast Report (CSV)",
-                data=csv_data,
-                file_name=f"Inventory_Forecast_{datetime.now(IST).strftime('%Y%m%d')}.csv",
-                mime="text/csv"
-            )
-            
-            st.dataframe(
-                forecast_df,
-                use_container_width=True, hide_index=True, height=500,
-                column_config={
-                    "MATERIAL DISCRIPTION": st.column_config.TextColumn("Material Name", width="large"),
-                    "Predicted Days Left": st.column_config.TextColumn("Days to Stockout ⚠️", width="medium")
-                }
-            )
-            
+            st.download_button("📥 Download Forecast Report (CSV)", data=csv_data, file_name=f"Inventory_Forecast_{datetime.now(IST).strftime('%Y%m%d')}.csv", mime="text/csv")
+            st.dataframe(forecast_df, use_container_width=True, hide_index=True, height=500, column_config={
+                "MATERIAL DISCRIPTION": st.column_config.TextColumn("Material Name", width="large"),
+                "Predicted Days Left": st.column_config.TextColumn("Days to Stockout ⚠️", width="medium")
+            })
         with colB:
             st.markdown("#### Top 5 Consumed Materials (30 Days)")
             top_chart_data = forecast_df.head(5)
@@ -281,7 +254,38 @@ with tab4:
         dlog = dlog[dlog['Material Discription'].str.len() > 1]
         dlog = dlog[dlog['Material Discription'].str.lower() != 'nan']
     
-    search = st.text_input("🔍 Search History...", placeholder="Filter by date, name, or material...")
+    # --- NEW: SORT LIFO (LAST IN, FIRST OUT) ---
+    if 'Date' in dlog.columns:
+        # Convert to datetime temporarily for accurate sorting
+        dlog['Temp_Date'] = pd.to_datetime(dlog['Date'], format='mixed', dayfirst=True, errors='coerce')
+        dlog = dlog.sort_values(by='Temp_Date', ascending=False)
+        
+        # Get unique dates for the dropdown filter (Formatted nicely)
+        unique_dates = dlog['Temp_Date'].dropna().dt.strftime('%d-%b-%Y').unique().tolist()
+        
+        # Drop the temp column as we just needed it for sorting
+        dlog = dlog.drop(columns=['Temp_Date'])
+    else:
+        unique_dates = []
+
+    # --- NEW: DATE DROPDOWN & SEARCH UI ---
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        if unique_dates:
+            selected_date = st.selectbox("📅 Filter by Date", ["All Dates"] + unique_dates)
+        else:
+            selected_date = "All Dates"
+            
+    with col2:
+        search = st.text_input("🔍 Search History...", placeholder="Filter by name, material, or purpose...")
+
+    # Apply Date Filter
+    if selected_date != "All Dates" and 'Date' in dlog.columns:
+        # Convert sheet dates temporarily to match the dropdown format for perfect filtering
+        temp_filter_dates = pd.to_datetime(dlog['Date'], format='mixed', dayfirst=True, errors='coerce').dt.strftime('%d-%b-%Y')
+        dlog = dlog[temp_filter_dates == selected_date]
+
+    # Apply Search Filter
     if search:
         dlog = dlog[dlog.apply(lambda r: search.upper() in r.astype(str).str.upper().to_string(), axis=1)]
 
