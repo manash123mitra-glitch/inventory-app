@@ -129,7 +129,6 @@ def load_data():
         inv = pd.read_csv(INV_URL) if h_idx is None else pd.read_csv(INV_URL, skiprows=h_idx)
         inv.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in inv.columns]
         
-        # SMART COLUMN RENAMER (Ensures TYPE(RATING) is always caught regardless of spacing)
         inv_rename_dict = {
             'TYPE': 'TYPE(RATING)',
             'TYPE (RATING)': 'TYPE(RATING)',
@@ -211,7 +210,6 @@ filtered_inv = inv_df.copy()
 if sel_loc != "All Locations":
     filtered_inv = filtered_inv[filtered_inv['LOCATION'].astype(str) == sel_loc]
 
-# Explicity defining columns here ensuring TYPE(RATING) is present
 display_cols = ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'LIVE STOCK']
 final_cols = [c for c in display_cols if c in inv_df.columns]
 
@@ -247,7 +245,9 @@ with tab1:
     
     display_inv = filtered_inv.copy()
     if search_inv:
-        display_inv = display_inv[display_inv.apply(lambda r: search_inv.upper() in r.astype(str).str.upper().to_string(), axis=1)]
+        # THE FIX: Robust search across all columns avoiding Pandas truncation
+        mask = display_inv.astype(str).apply(lambda row: row.str.contains(search_inv, case=False, na=False, regex=False)).any(axis=1)
+        display_inv = display_inv[mask]
         
     st.dataframe(
         style_critical_rows(display_inv[final_cols]), 
@@ -328,7 +328,9 @@ with tab4:
         dlog = dlog[temp_filter_dates == selected_date]
 
     if search:
-        dlog = dlog[dlog.apply(lambda r: search.upper() in r.astype(str).str.upper().to_string(), axis=1)]
+        # THE FIX: Robust search applied here as well
+        mask = dlog.astype(str).apply(lambda row: row.str.contains(search, case=False, na=False, regex=False)).any(axis=1)
+        dlog = dlog[mask]
 
     if dlog.empty:
         st.info("No records found for the selected criteria.")
