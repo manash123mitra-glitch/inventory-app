@@ -69,8 +69,8 @@ st.markdown("""
         padding: 10px;
         border-bottom: 1px solid #e6e9ef;
         border-right: 1px solid #e6e9ef;
-        white-space: normal !important;  /* FORCES TEXT WRAPPING */
-        word-wrap: break-word;           /* PREVENTS OVERFLOW */
+        white-space: normal !important;  
+        word-wrap: break-word;           
         vertical-align: top;
         color: #4a5568;
     }
@@ -235,7 +235,21 @@ compact_config = {
 tab1, tab2, tab3, tab4 = st.tabs(["📦 Master Inventory", "🚨 Action Required", "📈 Predictive Analytics", "📋 Drawal History"])
 
 with tab1:
-    st.dataframe(style_critical_rows(filtered_inv[final_cols]), use_container_width=True, hide_index=True, height=600, column_config=compact_config)
+    # --- NEW: INVENTORY SEARCH BAR ---
+    search_inv = st.text_input("🔍 Search Inventory...", placeholder="Filter by material name, make, size, or location...")
+    
+    display_inv = filtered_inv.copy()
+    if search_inv:
+        # Filter the dataframe dynamically based on the search term across all columns
+        display_inv = display_inv[display_inv.apply(lambda r: search_inv.upper() in r.astype(str).str.upper().to_string(), axis=1)]
+        
+    st.dataframe(
+        style_critical_rows(display_inv[final_cols]), 
+        use_container_width=True, 
+        hide_index=True, 
+        height=600, 
+        column_config=compact_config
+    )
 
 with tab2:
     if not crit.empty:
@@ -318,7 +332,6 @@ with tab4:
     if dlog.empty:
         st.info("No records found for the selected criteria.")
     else:
-        # Convert to HTML, applying the .wrap-table CSS class defined at the top of the script
         html_output = dlog.to_html(index=False, classes="wrap-table", escape=False)
         st.markdown(html_output, unsafe_allow_html=True)
 
