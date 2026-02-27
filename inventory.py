@@ -47,7 +47,6 @@ st.markdown("""
         padding: 8px 12px !important; font-size: 0.9rem !important;
     }
 
-    /* CSS For Text-Wrapping HTML Table in Tab 4 */
     .wrap-table {
         width: 100%;
         border-collapse: collapse;
@@ -130,6 +129,14 @@ def load_data():
         inv = pd.read_csv(INV_URL) if h_idx is None else pd.read_csv(INV_URL, skiprows=h_idx)
         inv.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in inv.columns]
         
+        # SMART COLUMN RENAMER (Ensures TYPE(RATING) is always caught regardless of spacing)
+        inv_rename_dict = {
+            'TYPE': 'TYPE(RATING)',
+            'TYPE (RATING)': 'TYPE(RATING)',
+            'RATING': 'TYPE(RATING)'
+        }
+        inv = inv.rename(columns=inv_rename_dict)
+        
         if 'MATERIAL DISCRIPTION' in inv.columns:
             inv = inv[inv['MATERIAL DISCRIPTION'].astype(str).str.lower() != 'nan']
             inv = inv[inv['MATERIAL DISCRIPTION'].str.upper() != 'MATERIAL DISCRIPTION']
@@ -204,6 +211,7 @@ filtered_inv = inv_df.copy()
 if sel_loc != "All Locations":
     filtered_inv = filtered_inv[filtered_inv['LOCATION'].astype(str) == sel_loc]
 
+# Explicity defining columns here ensuring TYPE(RATING) is present
 display_cols = ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'LIVE STOCK']
 final_cols = [c for c in display_cols if c in inv_df.columns]
 
@@ -235,12 +243,10 @@ compact_config = {
 tab1, tab2, tab3, tab4 = st.tabs(["📦 Master Inventory", "🚨 Action Required", "📈 Predictive Analytics", "📋 Drawal History"])
 
 with tab1:
-    # --- NEW: INVENTORY SEARCH BAR ---
     search_inv = st.text_input("🔍 Search Inventory...", placeholder="Filter by material name, make, size, or location...")
     
     display_inv = filtered_inv.copy()
     if search_inv:
-        # Filter the dataframe dynamically based on the search term across all columns
         display_inv = display_inv[display_inv.apply(lambda r: search_inv.upper() in r.astype(str).str.upper().to_string(), axis=1)]
         
     st.dataframe(
@@ -299,7 +305,6 @@ with tab4:
         dlog = dlog[dlog['Material Discription'].str.len() > 1]
         dlog = dlog[dlog['Material Discription'].str.lower() != 'nan']
     
-    # Sort LIFO (LAST IN, FIRST OUT)
     if 'Date' in dlog.columns:
         dlog['Temp_Date'] = pd.to_datetime(dlog['Date'], format='mixed', dayfirst=True, errors='coerce')
         dlog = dlog.sort_values(by='Temp_Date', ascending=False)
@@ -308,7 +313,6 @@ with tab4:
     else:
         unique_dates = []
 
-    # DATE DROPDOWN & SEARCH UI
     col1, col2 = st.columns([1, 2])
     with col1:
         if unique_dates:
@@ -319,16 +323,13 @@ with tab4:
     with col2:
         search = st.text_input("🔍 Search History...", placeholder="Filter by name, material, or purpose...")
 
-    # Apply Date Filter
     if selected_date != "All Dates" and 'Date' in dlog.columns:
         temp_filter_dates = pd.to_datetime(dlog['Date'], format='mixed', dayfirst=True, errors='coerce').dt.strftime('%d-%b-%Y')
         dlog = dlog[temp_filter_dates == selected_date]
 
-    # Apply Search Filter
     if search:
         dlog = dlog[dlog.apply(lambda r: search.upper() in r.astype(str).str.upper().to_string(), axis=1)]
 
-    # --- HTML RENDERER FOR FORCED WRAPPING ---
     if dlog.empty:
         st.info("No records found for the selected criteria.")
     else:
