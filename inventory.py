@@ -47,6 +47,7 @@ st.markdown("""
         padding: 8px 12px !important; font-size: 0.9rem !important;
     }
 
+    /* CSS For Text-Wrapping HTML Table */
     .wrap-table {
         width: 100%;
         border-collapse: collapse;
@@ -68,8 +69,8 @@ st.markdown("""
         padding: 10px;
         border-bottom: 1px solid #e6e9ef;
         border-right: 1px solid #e6e9ef;
-        white-space: normal !important;  
-        word-wrap: break-word;           
+        white-space: normal !important;  /* FORCES TEXT WRAPPING */
+        word-wrap: break-word;           /* PREVENTS OVERFLOW */
         vertical-align: top;
         color: #4a5568;
     }
@@ -129,6 +130,7 @@ def load_data():
         inv = pd.read_csv(INV_URL) if h_idx is None else pd.read_csv(INV_URL, skiprows=h_idx)
         inv.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in inv.columns]
         
+        # Smart Column Renamer
         inv_rename_dict = {
             'TYPE': 'TYPE(RATING)',
             'TYPE (RATING)': 'TYPE(RATING)',
@@ -141,7 +143,7 @@ def load_data():
             inv = inv[inv['MATERIAL DISCRIPTION'].str.upper() != 'MATERIAL DISCRIPTION']
             inv = inv[inv['MATERIAL DISCRIPTION'].str.strip() != '']
 
-        log = pd.read_csv(LOG_URL)
+        log = pd.read_csv(LOG_URL).fillna("")
         log.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in log.columns]
         
         rename_dict = {
@@ -245,7 +247,7 @@ with tab1:
     
     display_inv = filtered_inv.copy()
     if search_inv:
-        # THE FIX: Robust search across all columns avoiding Pandas truncation
+        # Robust search across all columns avoiding Pandas truncation
         mask = display_inv.astype(str).apply(lambda row: row.str.contains(search_inv, case=False, na=False, regex=False)).any(axis=1)
         display_inv = display_inv[mask]
         
@@ -287,7 +289,7 @@ with tab3:
         st.warning("Not enough usage history yet to generate accurate predictions.")
 
 with tab4:
-    dlog = log_raw.fillna("").astype(str)
+    dlog = log_raw.astype(str)
     rename_dict = {
         'DATE': 'Date', 'MAKE': 'Make', 'MATERIAL DISCRIPTION': 'Material Discription',
         'TYPE(RATING)': 'Type(Rating)', 'SIZE': 'Size', 'LOCATION': 'Location',
@@ -305,6 +307,7 @@ with tab4:
         dlog = dlog[dlog['Material Discription'].str.len() > 1]
         dlog = dlog[dlog['Material Discription'].str.lower() != 'nan']
     
+    # Sort LIFO (LAST IN, FIRST OUT)
     if 'Date' in dlog.columns:
         dlog['Temp_Date'] = pd.to_datetime(dlog['Date'], format='mixed', dayfirst=True, errors='coerce')
         dlog = dlog.sort_values(by='Temp_Date', ascending=False)
@@ -313,6 +316,7 @@ with tab4:
     else:
         unique_dates = []
 
+    # DATE DROPDOWN & SEARCH UI
     col1, col2 = st.columns([1, 2])
     with col1:
         if unique_dates:
@@ -321,17 +325,19 @@ with tab4:
             selected_date = "All Dates"
             
     with col2:
-        search = st.text_input("🔍 Search History...", placeholder="Filter by name, material, or purpose...")
+        search_log = st.text_input("🔍 Search History...", placeholder="Filter by name, material, or purpose...")
 
+    # Apply Date Filter
     if selected_date != "All Dates" and 'Date' in dlog.columns:
         temp_filter_dates = pd.to_datetime(dlog['Date'], format='mixed', dayfirst=True, errors='coerce').dt.strftime('%d-%b-%Y')
         dlog = dlog[temp_filter_dates == selected_date]
 
-    if search:
-        # THE FIX: Robust search applied here as well
-        mask = dlog.astype(str).apply(lambda row: row.str.contains(search, case=False, na=False, regex=False)).any(axis=1)
+    # Apply Search Filter (Robust masking)
+    if search_log:
+        mask = dlog.astype(str).apply(lambda row: row.str.contains(search_log, case=False, na=False, regex=False)).any(axis=1)
         dlog = dlog[mask]
 
+    # Render HTML for auto-wrapping long text
     if dlog.empty:
         st.info("No records found for the selected criteria.")
     else:
