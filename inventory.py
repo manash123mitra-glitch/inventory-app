@@ -228,16 +228,8 @@ else:
     kpi4.metric("🔥 High-Velocity Item", "Awaiting Data", "0 used/mo", delta_color="off")
 
 def style_critical_rows(df):
+    """Applies inline CSS for critical stock rows so it exports perfectly to HTML."""
     return df.style.apply(lambda x: ['background-color: #fff0f0; color: #c0392b; font-weight: 600' if x['LIVE STOCK'] <= 2 else '' for i in x], axis=1)
-
-compact_config = {
-    "MAKE": st.column_config.TextColumn("Make", width="small"),
-    "MATERIAL DISCRIPTION": st.column_config.TextColumn("Material Discription", width="large"),
-    "TYPE(RATING)": st.column_config.TextColumn("Type(Rating)", width="medium"),
-    "SIZE": st.column_config.TextColumn("Size", width="small"),
-    "LOCATION": st.column_config.TextColumn("Location", width="medium"),
-    "LIVE STOCK": st.column_config.NumberColumn("Live Stock", format="%d", width="small"),
-}
 
 # --- TABS ---
 tab1, tab2, tab3, tab4 = st.tabs(["📦 Master Inventory", "🚨 Action Required", "📈 Predictive Analytics", "📋 Drawal History"])
@@ -251,18 +243,18 @@ with tab1:
         mask = display_inv.astype(str).apply(lambda row: row.str.contains(search_inv, case=False, na=False, regex=False)).any(axis=1)
         display_inv = display_inv[mask]
         
-    st.dataframe(
-        style_critical_rows(display_inv[final_cols]), 
-        use_container_width=True, 
-        hide_index=True, 
-        height=600, 
-        column_config=compact_config
-    )
+    if display_inv.empty:
+        st.info("No items match your search.")
+    else:
+        # THE FIX: Apply the 'wrap-table' class to force the Size column (and others) to wrap
+        styled_inv = style_critical_rows(display_inv[final_cols]).set_table_attributes('class="wrap-table"')
+        st.markdown(styled_inv.to_html(), unsafe_allow_html=True)
 
 with tab2:
     if not crit.empty:
         st.error(f"⚠️ **{len(crit)} items are at or below re-order level (2 units).**")
-        st.dataframe(style_critical_rows(crit[final_cols]), use_container_width=True, hide_index=True, column_config=compact_config)
+        styled_crit = style_critical_rows(crit[final_cols]).set_table_attributes('class="wrap-table"')
+        st.markdown(styled_crit.to_html(), unsafe_allow_html=True)
     else:
         st.success("✅ Stock levels are healthy. No critical alerts.")
 
@@ -277,10 +269,10 @@ with tab3:
         with colA:
             csv_data = forecast_df.to_csv(index=False).encode('utf-8')
             st.download_button("📥 Download Forecast Report (CSV)", data=csv_data, file_name=f"Inventory_Forecast_{datetime.now(IST).strftime('%Y%m%d')}.csv", mime="text/csv")
-            st.dataframe(forecast_df, use_container_width=True, hide_index=True, height=500, column_config={
-                "MATERIAL DISCRIPTION": st.column_config.TextColumn("Material Name", width="large"),
-                "Predicted Days Left": st.column_config.TextColumn("Days to Stockout ⚠️", width="medium")
-            })
+            
+            # Using HTML here for consistency and wrapping
+            html_forecast = forecast_df.to_html(index=False, classes="wrap-table", escape=False)
+            st.markdown(html_forecast, unsafe_allow_html=True)
         with colB:
             st.markdown("#### Top 5 Consumed Materials (30 Days)")
             top_chart_data = forecast_df.head(5)
