@@ -19,7 +19,7 @@ LOG_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&
 
 st.set_page_config(page_title="EMD Material Intelligence", layout="wide", page_icon="⚡")
 
-# --- 2. PREMIUM ENTERPRISE CSS ---
+# --- 2. PREMIUM ENTERPRISE CSS (STRICT WRAPPING) ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -43,11 +43,7 @@ st.markdown("""
     .header-box h1 { margin: 0; font-size: 2rem; font-weight: 700; letter-spacing: -0.5px; }
     .header-box p { margin: 0; opacity: 0.8; font-size: 0.9rem; }
     
-    [data-testid="stDataFrame"] td, [data-testid="stDataFrame"] th {
-        padding: 8px 12px !important; font-size: 0.9rem !important;
-    }
-
-    /* CSS For Text-Wrapping HTML Table */
+    /* ENHANCED TABLE STYLE TO FIX ALL COLUMN OVERFLOWS */
     .wrap-table {
         width: 100%;
         border-collapse: collapse;
@@ -55,6 +51,7 @@ st.markdown("""
         background-color: white;
         border: 1px solid #e6e9ef;
         margin-top: 15px;
+        table-layout: auto;
     }
     .wrap-table th {
         background-color: #f8f9fa;
@@ -69,8 +66,10 @@ st.markdown("""
         padding: 10px;
         border-bottom: 1px solid #e6e9ef;
         border-right: 1px solid #e6e9ef;
-        white-space: normal !important;  /* FORCES TEXT WRAPPING */
-        word-wrap: break-word;           /* PREVENTS OVERFLOW */
+        white-space: normal !important;    /* FORCES WRAPPING */
+        word-wrap: break-word !important;  /* BREAKS LONG WORDS */
+        word-break: break-all !important;  /* ENSURES CODES/SIZES BREAK */
+        overflow-wrap: anywhere !important;
         vertical-align: top;
         color: #4a5568;
     }
@@ -125,6 +124,7 @@ def send_daily_summary_email(dataframe):
 @st.cache_data(ttl=60)
 def load_data():
     try:
+        # 1. Master Inventory
         inv_raw = pd.read_csv(INV_URL, header=None).fillna("").astype(str)
         h_idx = next((i for i, r in inv_raw.iterrows() if "MATERIAL" in " ".join(r).upper()), None)
         inv = pd.read_csv(INV_URL) if h_idx is None else pd.read_csv(INV_URL, skiprows=h_idx)
@@ -143,6 +143,7 @@ def load_data():
             inv = inv[inv['MATERIAL DISCRIPTION'].str.upper() != 'MATERIAL DISCRIPTION']
             inv = inv[inv['MATERIAL DISCRIPTION'].str.strip() != '']
 
+        # 2. Usage Logs
         log = pd.read_csv(LOG_URL).fillna("")
         log.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in log.columns]
         
@@ -156,12 +157,14 @@ def load_data():
         if 'Date' in log_clean.columns:
             log_clean['Date'] = pd.to_datetime(log_clean['Date'], format='mixed', dayfirst=True, errors='coerce')
 
+        # 3. Live Stock Setting
         if 'TOTAL NO' in inv.columns: 
             inv['TOTAL NO'] = pd.to_numeric(inv['TOTAL NO'], errors='coerce').fillna(0).astype(int)
             inv['LIVE STOCK'] = inv['TOTAL NO']
         else:
             inv['LIVE STOCK'] = 0
 
+        # 4. Predictive Engine Calculations
         if 'Date' in log_clean.columns and 'Material Discription' in log_clean.columns:
             thirty_days_ago = pd.Timestamp.now() - pd.Timedelta(days=30)
             recent_logs = log_clean[log_clean['Date'] >= thirty_days_ago]
@@ -191,6 +194,7 @@ def load_data():
 status, inv_df, log_raw = load_data()
 if not status: st.error(inv_df); st.stop()
 
+# Header
 st.markdown("""
 <div class='header-box'>
     <div>
@@ -204,6 +208,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# Sidebar
 st.sidebar.header("⚙️ Global Controls")
 loc_list = sorted(inv_df['LOCATION'].replace('nan', 'Unassigned').astype(str).unique().tolist())
 sel_loc = st.sidebar.selectbox("📍 Filter Zone", ["All Locations"] + loc_list)
@@ -215,6 +220,7 @@ if sel_loc != "All Locations":
 display_cols = ['MAKE', 'MATERIAL DISCRIPTION', 'TYPE(RATING)', 'SIZE', 'LOCATION', 'LIVE STOCK']
 final_cols = [c for c in display_cols if c in inv_df.columns]
 
+# KPIs
 crit = filtered_inv[filtered_inv['LIVE STOCK'] <= 2]
 top_item = filtered_inv.sort_values(by='30-Day Usage', ascending=False).iloc[0] if '30-Day Usage' in filtered_inv.columns and not filtered_inv.empty else None
 
@@ -231,9 +237,12 @@ def style_critical_rows(df):
     """Applies inline CSS for critical stock rows so it exports perfectly to HTML."""
     return df.style.apply(lambda x: ['background-color: #fff0f0; color: #c0392b; font-weight: 600' if x['LIVE STOCK'] <= 2 else '' for i in x], axis=1)
 
-# --- TABS ---
-tab1, tab2, tab3, tab4 = st.tabs(["📦 Master Inventory", "🚨 Action Required", "📈 Predictive Analytics", "📋 Drawal History"])
+# --- 7. TABS ---
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📦 Master Inventory", "🚨 Action Required", "📈 Predictive Analytics", "📋 Drawal History", "⚡ Power Query"
+])
 
+# TAB 1: MASTER INVENTORY
 with tab1:
     search_inv = st.text_input("🔍 Search Inventory...", placeholder="Filter by material name, make, size, or location...")
     
@@ -246,18 +255,20 @@ with tab1:
     if display_inv.empty:
         st.info("No items match your search.")
     else:
-        # THE FIX: Apply the 'wrap-table' class to force the Size column (and others) to wrap
+        # Apply the 'wrap-table' class to force the Size column (and others) to wrap
         styled_inv = style_critical_rows(display_inv[final_cols]).set_table_attributes('class="wrap-table"')
-        st.markdown(styled_inv.to_html(), unsafe_allow_html=True)
+        st.markdown(styled_inv.to_html(escape=False), unsafe_allow_html=True)
 
+# TAB 2: ACTION REQUIRED
 with tab2:
     if not crit.empty:
         st.error(f"⚠️ **{len(crit)} items are at or below re-order level (2 units).**")
         styled_crit = style_critical_rows(crit[final_cols]).set_table_attributes('class="wrap-table"')
-        st.markdown(styled_crit.to_html(), unsafe_allow_html=True)
+        st.markdown(styled_crit.to_html(escape=False), unsafe_allow_html=True)
     else:
         st.success("✅ Stock levels are healthy. No critical alerts.")
 
+# TAB 3: PREDICTIVE ANALYTICS
 with tab3:
     st.markdown("### 📈 Inventory Forecasting & Health")
     st.info("💡 **How this works:** The system analyzes the last 30 days of drawal history to calculate your daily consumption rate and predicts exactly when you will run out of stock.")
@@ -266,13 +277,13 @@ with tab3:
     if all(c in filtered_inv.columns for c in pred_cols):
         forecast_df = filtered_inv[pred_cols].sort_values(by='30-Day Usage', ascending=False)
         colA, colB = st.columns([2, 1])
+        
         with colA:
             csv_data = forecast_df.to_csv(index=False).encode('utf-8')
             st.download_button("📥 Download Forecast Report (CSV)", data=csv_data, file_name=f"Inventory_Forecast_{datetime.now(IST).strftime('%Y%m%d')}.csv", mime="text/csv")
-            
-            # Using HTML here for consistency and wrapping
             html_forecast = forecast_df.to_html(index=False, classes="wrap-table", escape=False)
             st.markdown(html_forecast, unsafe_allow_html=True)
+            
         with colB:
             st.markdown("#### Top 5 Consumed Materials (30 Days)")
             top_chart_data = forecast_df.head(5)
@@ -280,16 +291,17 @@ with tab3:
     else:
         st.warning("Not enough usage history yet to generate accurate predictions.")
 
+# TAB 4: DRAWAL HISTORY
 with tab4:
     dlog = log_raw.astype(str)
-    rename_dict = {
+    rename_dict_log = {
         'DATE': 'Date', 'MAKE': 'Make', 'MATERIAL DISCRIPTION': 'Material Discription',
         'TYPE(RATING)': 'Type(Rating)', 'SIZE': 'Size', 'LOCATION': 'Location',
         'QUANTITY ISSUED': 'Quantity Issued', 'ISSUED QUANTITY': 'Quantity Issued', 'QTY': 'Quantity Issued',
         'UNIT': 'Unit', 'ISSUED TO': 'Issued To', 'NAME': 'Issued To',
         'PURPOSE': 'Purpose', 'REMARKS': 'Purpose'
     }
-    dlog = dlog.rename(columns=rename_dict)
+    dlog = dlog.rename(columns=rename_dict_log)
     
     target_10_cols = ['Date', 'Make', 'Material Discription', 'Type(Rating)', 'Size', 'Location', 'Quantity Issued', 'Unit', 'Issued To', 'Purpose']
     dlog_cols = [c for c in target_10_cols if c in dlog.columns]
@@ -324,19 +336,83 @@ with tab4:
         temp_filter_dates = pd.to_datetime(dlog['Date'], format='mixed', dayfirst=True, errors='coerce').dt.strftime('%d-%b-%Y')
         dlog = dlog[temp_filter_dates == selected_date]
 
-    # Apply Search Filter (Robust masking)
+    # Apply Search Filter
     if search_log:
         mask = dlog.astype(str).apply(lambda row: row.str.contains(search_log, case=False, na=False, regex=False)).any(axis=1)
         dlog = dlog[mask]
 
-    # Render HTML for auto-wrapping long text
+    # Render HTML for auto-wrapping
     if dlog.empty:
         st.info("No records found for the selected criteria.")
     else:
         html_output = dlog.to_html(index=False, classes="wrap-table", escape=False)
         st.markdown(html_output, unsafe_allow_html=True)
 
-# --- 7. AUTOMATED EMAIL LOGIC ---
+# TAB 5: POWER QUERY
+with tab5:
+    st.markdown("### 🔍 Interactive Consumption Query")
+    st.info("Calculate exactly how much of a specific material was used over a custom time period.")
+    
+    # Safely prep log data for numerical/date analysis
+    query_log = log_raw.copy()
+    query_log.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in query_log.columns]
+    
+    rename_query_dict = {
+        'DATE': 'Date', 'MATERIAL DISCRIPTION': 'Material Discription',
+        'QUANTITY ISSUED': 'Qty', 'ISSUED QUANTITY': 'Qty', 'QTY': 'Qty',
+        'NAME': 'ISSUED TO', 'REMARKS': 'PURPOSE'
+    }
+    query_log = query_log.rename(columns=rename_query_dict)
+    
+    if 'Qty' in query_log.columns:
+        query_log['Qty'] = pd.to_numeric(query_log['Qty'], errors='coerce').fillna(0).astype(int)
+    if 'Date' in query_log.columns:
+        query_log['Date'] = pd.to_datetime(query_log['Date'], format='mixed', dayfirst=True, errors='coerce')
+    
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        # Get unique materials from inventory
+        if 'MATERIAL DISCRIPTION' in filtered_inv.columns:
+            material_list = sorted(filtered_inv['MATERIAL DISCRIPTION'].dropna().unique().tolist())
+        else:
+            material_list = []
+        selected_material = st.selectbox("🎯 Select Material to Analyze", material_list)
+    
+    with col_b:
+        days_lookback = st.number_input("📅 Lookback Period (Number of Days)", min_value=1, max_value=365, value=30)
+
+    if selected_material and 'Date' in query_log.columns and 'Material Discription' in query_log.columns:
+        cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=days_lookback)
+        query_mask = (query_log['Material Discription'] == selected_material) & (query_log['Date'] >= cutoff_date)
+        filtered_logs = query_log[query_mask].copy()
+        
+        total_consumed = filtered_logs['Qty'].sum()
+        burn_rate = round(total_consumed / days_lookback, 2)
+        
+        # KPI Display
+        q1, q2, q3 = st.columns(3)
+        q1.metric(f"Total Consumed (Last {days_lookback} days)", f"{int(total_consumed)} Units")
+        q2.metric("Daily Burn Rate", f"{burn_rate} / day")
+        q3.metric("Transaction Count", len(filtered_logs))
+        
+        if not filtered_logs.empty:
+            st.markdown(f"#### 📋 Detailed Logs for '{selected_material}'")
+            # Determine which columns are available to show
+            display_cols_query = ['Date', 'Qty']
+            if 'ISSUED TO' in filtered_logs.columns: display_cols_query.append('ISSUED TO')
+            if 'PURPOSE' in filtered_logs.columns: display_cols_query.append('PURPOSE')
+            
+            display_query = filtered_logs[display_cols_query].copy()
+            display_query['Date'] = display_query['Date'].dt.strftime('%d-%b-%Y')
+            
+            st.markdown(display_query.to_html(index=False, classes="wrap-table", escape=False), unsafe_allow_html=True)
+        else:
+            st.warning(f"No consumption recorded for this item in the last {days_lookback} days.")
+    else:
+        st.warning("Insufficient log data to perform query.")
+
+# --- 8. AUTOMATED EMAIL LOGIC ---
 today = datetime.now(IST).strftime("%Y-%m-%d")
 global_crit = inv_df[inv_df['LIVE STOCK'] <= 2]
 
