@@ -210,7 +210,7 @@ st.markdown("""
 
 # Sidebar
 st.sidebar.header("⚙️ Global Controls")
-loc_list = sorted(inv_df['LOCATION'].replace('nan', 'Unassigned').astype(str).unique().tolist())
+loc_list = sorted(inv_df['LOCATION'].fillna('Unassigned').astype(str).replace(['nan', 'None'], 'Unassigned').unique().tolist())
 sel_loc = st.sidebar.selectbox("📍 Filter Zone", ["All Locations"] + loc_list)
 
 filtered_inv = inv_df.copy()
