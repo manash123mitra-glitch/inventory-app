@@ -376,12 +376,22 @@ with tab5:
             material_list = sorted(filtered_inv['MATERIAL DISCRIPTION'].dropna().unique().tolist())
         else:
             material_list = []
-        selected_material = st.selectbox("🎯 Select Material to Analyze", material_list)
+        
+        # UI FIX: Added index=None and placeholder to create a blank, searchable combobox
+        selected_material = st.selectbox(
+            "🎯 Search/Select Material to Analyze", 
+            options=material_list,
+            index=None, 
+            placeholder="Type or paste exact material name here..."
+        )
     
     with col_b:
         days_lookback = st.number_input("📅 Lookback Period (Number of Days)", min_value=1, max_value=365, value=30)
 
-    if selected_material and 'Date' in query_log.columns and 'Material Discription' in query_log.columns:
+    # Added condition so the space stays clean until a user actually selects/types something
+    if not selected_material:
+        st.info("👆 Please type or select a material name in the box above to generate the query.")
+    elif selected_material and 'Date' in query_log.columns and 'Material Discription' in query_log.columns:
         cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=days_lookback)
         query_mask = (query_log['Material Discription'] == selected_material) & (query_log['Date'] >= cutoff_date)
         filtered_logs = query_log[query_mask].copy()
