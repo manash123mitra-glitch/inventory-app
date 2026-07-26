@@ -9,8 +9,8 @@ import pytz
 
 # --- 1. GLOBAL SETTINGS ---
 SHEET_ID = "1E0ZluX3o7vqnSBAdAMEn_cdxq3ro4F4DXxchOEFcS_g"
-INV_GID = "804871972" 
-LOG_GID = "1151083374" 
+INV_GID = "804871972"
+LOG_GID = "1151083374"
 
 IST = pytz.timezone('Asia/Kolkata')
 
@@ -291,7 +291,7 @@ with tab3:
     else:
         st.warning("Not enough usage history yet to generate accurate predictions.")
 
-# TAB 4: DRAWAL HISTORY
+# TAB 4: DRAWAL HISTORY (FIXED DATE FILTERING)
 with tab4:
     dlog = log_raw.astype(str)
     rename_dict_log = {
@@ -311,11 +311,12 @@ with tab4:
         dlog = dlog[dlog['Material Discription'].str.len() > 1]
         dlog = dlog[dlog['Material Discription'].str.lower() != 'nan']
     
-    # Sort LIFO (LAST IN, FIRST OUT)
+    # Sort LIFO and explicit date formatting
     if 'Date' in dlog.columns:
         dlog['Temp_Date'] = pd.to_datetime(dlog['Date'], format='mixed', dayfirst=True, errors='coerce')
         dlog = dlog.sort_values(by='Temp_Date', ascending=False)
-        unique_dates = dlog['Temp_Date'].dropna().dt.strftime('%d-%b-%Y').unique().tolist()
+        dlog['Date'] = dlog['Temp_Date'].dt.strftime('%d-%b-%Y')
+        unique_dates = dlog['Date'].dropna().unique().tolist()
         dlog = dlog.drop(columns=['Temp_Date'])
     else:
         unique_dates = []
@@ -329,24 +330,24 @@ with tab4:
             selected_date = "All Dates"
             
     with col2:
-        search_log = st.text_input("🔍 Search History...", placeholder="Filter by name, material, or purpose...")
+        search_log = st.text_input("🔍 Search History...", placeholder="Filter by date (e.g., 11-May), name, or material...")
 
     # Apply Date Filter
     if selected_date != "All Dates" and 'Date' in dlog.columns:
-        temp_filter_dates = pd.to_datetime(dlog['Date'], format='mixed', dayfirst=True, errors='coerce').dt.strftime('%d-%b-%Y')
-        dlog = dlog[temp_filter_dates == selected_date]
+        dlog = dlog[dlog['Date'] == selected_date]
 
     # Apply Search Filter
     if search_log:
         mask = dlog.astype(str).apply(lambda row: row.str.contains(search_log, case=False, na=False, regex=False)).any(axis=1)
         dlog = dlog[mask]
 
-    # Render HTML for auto-wrapping
+    # Render HTML
     if dlog.empty:
         st.info("No records found for the selected criteria.")
     else:
         html_output = dlog.to_html(index=False, classes="wrap-table", escape=False)
         st.markdown(html_output, unsafe_allow_html=True)
+
 
 # TAB 5: POWER QUERY
 with tab5:
@@ -412,12 +413,28 @@ with tab5:
     else:
         st.warning("Insufficient log data to perform query.")
 
-# --- 8. AUTOMATED EMAIL LOGIC ---
+# --- 8. AUTOMATED & MANUAL EMAIL LOGIC (FIXED) ---
+st.sidebar.markdown("---")
+st.sidebar.header("📧 Report Controls")
+
 today = datetime.now(IST).strftime("%Y-%m-%d")
 global_crit = inv_df[inv_df['LIVE STOCK'] <= 2]
 
+# 1. Manual Testing Button
+if st.sidebar.button("📨 Send Report Now"):
+    if global_crit.empty:
+        st.sidebar.success("No critical items to send.")
+    else:
+        with st.spinner("Sending email..."):
+            if send_daily_summary_email(global_crit[final_cols]):
+                tracker.last_sent_date = today
+                st.sidebar.success("Email sent successfully!")
+            else:
+                st.sidebar.error("Failed to send. Check your Streamlit secrets.")
+
+# 2. Automated Logic (Requires an active session at/after 9 AM)
 if datetime.now(IST).hour >= 9 and tracker.last_sent_date != today and not global_crit.empty:
     email_df = global_crit[final_cols]
     if send_daily_summary_email(email_df):
         tracker.last_sent_date = today
-        st.toast("✅ Automated 9:00 AM Summary Dispatched!")
+        st.toast("✅ Automated Summary Dispatched!")
