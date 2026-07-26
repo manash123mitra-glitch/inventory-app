@@ -9,8 +9,8 @@ import pytz
 
 # --- 1. GLOBAL SETTINGS ---
 SHEET_ID = "1E0ZluX3o7vqnSBAdAMEn_cdxq3ro4F4DXxchOEFcS_g"
-INV_GID = "804871972"
-LOG_GID = "1151083374"
+INV_GID = "804871972" 
+LOG_GID = "1151083374" 
 
 IST = pytz.timezone('Asia/Kolkata')
 
@@ -66,9 +66,9 @@ st.markdown("""
         padding: 10px;
         border-bottom: 1px solid #e6e9ef;
         border-right: 1px solid #e6e9ef;
-        white-space: normal !important;    /* FORCES WRAPPING */
-        word-wrap: break-word !important;  /* BREAKS LONG WORDS */
-        word-break: break-all !important;  /* ENSURES CODES/SIZES BREAK */
+        white-space: normal !important;    
+        word-wrap: break-word !important;  
+        word-break: break-all !important;  
         overflow-wrap: anywhere !important;
         vertical-align: top;
         color: #4a5568;
@@ -148,7 +148,8 @@ def load_data():
         log.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in log.columns]
         
         rename_dict = {
-            'DATE': 'Date', 'MATERIAL DISCRIPTION': 'Material Discription',
+            'TIMESTAMP': 'Date', 'TIME STAMP': 'Date', 'DATE': 'Date', 
+            'MATERIAL DISCRIPTION': 'Material Discription',
             'QUANTITY ISSUED': 'Qty', 'ISSUED QUANTITY': 'Qty', 'QTY': 'Qty'
         }
         log_clean = log.rename(columns=rename_dict)
@@ -248,14 +249,12 @@ with tab1:
     
     display_inv = filtered_inv.copy()
     if search_inv:
-        # Robust search across all columns avoiding Pandas truncation
         mask = display_inv.astype(str).apply(lambda row: row.str.contains(search_inv, case=False, na=False, regex=False)).any(axis=1)
         display_inv = display_inv[mask]
         
     if display_inv.empty:
         st.info("No items match your search.")
     else:
-        # Apply the 'wrap-table' class to force the Size column (and others) to wrap
         styled_inv = style_critical_rows(display_inv[final_cols]).set_table_attributes('class="wrap-table"')
         st.markdown(styled_inv.to_html(escape=False), unsafe_allow_html=True)
 
@@ -291,11 +290,14 @@ with tab3:
     else:
         st.warning("Not enough usage history yet to generate accurate predictions.")
 
-# TAB 4: DRAWAL HISTORY (FIXED DATE FILTERING)
+# TAB 4: DRAWAL HISTORY
 with tab4:
     dlog = log_raw.astype(str)
+    
+    # Updated Dictionary to capture Timestamp columns natively
     rename_dict_log = {
-        'DATE': 'Date', 'MAKE': 'Make', 'MATERIAL DISCRIPTION': 'Material Discription',
+        'TIMESTAMP': 'Date', 'TIME STAMP': 'Date', 'DATE': 'Date', 
+        'MAKE': 'Make', 'MATERIAL DISCRIPTION': 'Material Discription',
         'TYPE(RATING)': 'Type(Rating)', 'SIZE': 'Size', 'LOCATION': 'Location',
         'QUANTITY ISSUED': 'Quantity Issued', 'ISSUED QUANTITY': 'Quantity Issued', 'QTY': 'Quantity Issued',
         'UNIT': 'Unit', 'ISSUED TO': 'Issued To', 'NAME': 'Issued To',
@@ -311,55 +313,52 @@ with tab4:
         dlog = dlog[dlog['Material Discription'].str.len() > 1]
         dlog = dlog[dlog['Material Discription'].str.lower() != 'nan']
     
-    # Sort LIFO and explicit date formatting
     if 'Date' in dlog.columns:
         dlog['Temp_Date'] = pd.to_datetime(dlog['Date'], format='mixed', dayfirst=True, errors='coerce')
         dlog = dlog.sort_values(by='Temp_Date', ascending=False)
-        dlog['Date'] = dlog['Temp_Date'].dt.strftime('%d-%b-%Y')
+        dlog['Date'] = dlog['Temp_Date'].dt.strftime('%d-%b-%Y') 
         unique_dates = dlog['Date'].dropna().unique().tolist()
         dlog = dlog.drop(columns=['Temp_Date'])
     else:
         unique_dates = []
 
-    # DATE DROPDOWN & SEARCH UI
     col1, col2 = st.columns([1, 2])
     with col1:
         if unique_dates:
             selected_date = st.selectbox("📅 Filter by Date", ["All Dates"] + unique_dates)
         else:
+            st.selectbox("📅 Filter by Date", ["No Dates Found"], disabled=True)
             selected_date = "All Dates"
+            st.error("⚠️ 'Date' or 'Timestamp' column missing from Google Sheet.")
             
     with col2:
         search_log = st.text_input("🔍 Search History...", placeholder="Filter by date (e.g., 11-May), name, or material...")
 
-    # Apply Date Filter
     if selected_date != "All Dates" and 'Date' in dlog.columns:
         dlog = dlog[dlog['Date'] == selected_date]
 
-    # Apply Search Filter
     if search_log:
         mask = dlog.astype(str).apply(lambda row: row.str.contains(search_log, case=False, na=False, regex=False)).any(axis=1)
         dlog = dlog[mask]
 
-    # Render HTML
     if dlog.empty:
         st.info("No records found for the selected criteria.")
     else:
         html_output = dlog.to_html(index=False, classes="wrap-table", escape=False)
         st.markdown(html_output, unsafe_allow_html=True)
 
-
 # TAB 5: POWER QUERY
 with tab5:
     st.markdown("### 🔍 Interactive Consumption Query")
     st.info("Calculate exactly how much of a specific material was used over a custom time period.")
     
-    # Safely prep log data for numerical/date analysis
     query_log = log_raw.copy()
     query_log.columns = [str(c).strip().upper().replace('DESCRIPTION', 'DISCRIPTION') for c in query_log.columns]
     
+    # Applied Timestamp fix here as well
     rename_query_dict = {
-        'DATE': 'Date', 'MATERIAL DISCRIPTION': 'Material Discription',
+        'TIMESTAMP': 'Date', 'TIME STAMP': 'Date', 'DATE': 'Date', 
+        'MATERIAL DISCRIPTION': 'Material Discription',
         'QUANTITY ISSUED': 'Qty', 'ISSUED QUANTITY': 'Qty', 'QTY': 'Qty',
         'NAME': 'ISSUED TO', 'REMARKS': 'PURPOSE'
     }
@@ -373,7 +372,6 @@ with tab5:
     col_a, col_b = st.columns(2)
     
     with col_a:
-        # Get unique materials from inventory
         if 'MATERIAL DISCRIPTION' in filtered_inv.columns:
             material_list = sorted(filtered_inv['MATERIAL DISCRIPTION'].dropna().unique().tolist())
         else:
@@ -391,7 +389,6 @@ with tab5:
         total_consumed = filtered_logs['Qty'].sum()
         burn_rate = round(total_consumed / days_lookback, 2)
         
-        # KPI Display
         q1, q2, q3 = st.columns(3)
         q1.metric(f"Total Consumed (Last {days_lookback} days)", f"{int(total_consumed)} Units")
         q2.metric("Daily Burn Rate", f"{burn_rate} / day")
@@ -399,7 +396,6 @@ with tab5:
         
         if not filtered_logs.empty:
             st.markdown(f"#### 📋 Detailed Logs for '{selected_material}'")
-            # Determine which columns are available to show
             display_cols_query = ['Date', 'Qty']
             if 'ISSUED TO' in filtered_logs.columns: display_cols_query.append('ISSUED TO')
             if 'PURPOSE' in filtered_logs.columns: display_cols_query.append('PURPOSE')
@@ -413,7 +409,7 @@ with tab5:
     else:
         st.warning("Insufficient log data to perform query.")
 
-# --- 8. AUTOMATED & MANUAL EMAIL LOGIC (FIXED) ---
+# --- 8. AUTOMATED & MANUAL EMAIL LOGIC ---
 st.sidebar.markdown("---")
 st.sidebar.header("📧 Report Controls")
 
@@ -430,7 +426,7 @@ if st.sidebar.button("📨 Send Report Now"):
                 tracker.last_sent_date = today
                 st.sidebar.success("Email sent successfully!")
             else:
-                st.sidebar.error("Failed to send. Check your Streamlit secrets.")
+                st.sidebar.error("Failed to send. Check your Streamlit Secrets configuration.")
 
 # 2. Automated Logic (Requires an active session at/after 9 AM)
 if datetime.now(IST).hour >= 9 and tracker.last_sent_date != today and not global_crit.empty:
